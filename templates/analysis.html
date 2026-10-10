@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Analysis - Smart Expense Analyzer</title>
+
+    <link
+        rel="stylesheet"
+        href="{{ url_for('static', filename='css/style.css') }}"
+    >
+</head>
+
+<body>
+
+<nav class="navbar">
+
+    <div class="container">
+
+        <a href="{{ url_for('home') }}" class="logo">
+            💰 Smart Expense Analyzer
+        </a>
+
+        <div class="nav-links">
+
+            <a href="{{ url_for('home') }}">
+                Dashboard
+            </a>
+
+            <a href="{{ url_for('transactions') }}">
+                Transactions
+            </a>
+
+            <a href="{{ url_for('analysis') }}">
+                Analysis
+            </a>
+
+        </div>
+
+    </div>
+
+</nav>
+
+
+<main class="container">
+
+    <section class="page-header">
+
+        <h1>
+            Financial Analysis 📊
+        </h1>
+
+        <p>
+            Understand your income, expenses and spending patterns.
+        </p>
+
+    </section>
+
+
+    <section class="dashboard-cards">
+
+        <div class="card">
+
+            <h3>
+                Total Income
+            </h3>
+
+            <h2>
+                ₹{{ "%.2f"|format(total_income) }}
+            </h2>
+
+        </div>
+
+
+        <div class="card">
+
+            <h3>
+                Total Expenses
+            </h3>
+
+            <h2>
+                ₹{{ "%.2f"|format(total_expenses) }}
+            </h2>
+
+        </div>
+
+
+        <div class="card">
+
+            <h3>
+                Remaining Balance
+            </h3>
+
+            <h2>
+                ₹{{ "%.2f"|format(remaining_balance) }}
+            </h2>
+
+        </div>
+
+    </section>
+
+
+    <section class="page-header">
+
+        <h2>
+            Category-wise Expenses
+        </h2>
+
+        <p>
+            See how your expenses are distributed across categories.
+        </p>
+
+    </section>
+
+
+    <div class="chart-card">
+
+        <img
+            src="{{ url_for(
+                'static',
+                filename='charts/category_expenses.png'
+            ) }}"
+            alt="Category-wise Expenses Chart"
+        >
+
+    </div>
+
+
+    <section class="page-header">
+
+        <h2>
+            Monthly Expense Trend
+        </h2>
+
+        <p>
+            Track how your expenses change over time.
+        </p>
+
+    </section>
+
+
+    <div class="chart-card">
+
+        <img
+            src="{{ url_for(
+                'static',
+                filename='charts/monthly_expenses.png'
+            ) }}"
+            alt="Monthly Expense Trend Chart"
+        >
+
+    </div>
+
+
+    <section class="page-header">
+
+        <h2>
+            Income vs Expenses
+        </h2>
+
+        <p>
+            Compare your total income with your total expenses.
+        </p>
+
+    </section>
+
+
+    <div class="chart-card">
+
+        <img
+            src="{{ url_for(
+                'static',
+                filename='charts/income_vs_expense.png'
+            ) }}"
+            alt="Income vs Expenses Chart"
+        >
+
+    </div>
+
+
+    <section class="page-header">
+
+        <h2>
+            Category Summary
+        </h2>
+
+    </section>
+
+
+    <div class="table-container">
+
+        <table>
+
+            <thead>
+
+                <tr>
+
+                    <th>
+                        Category
+                    </th>
+
+                    <th>
+                        Total Expense
+                    </th>
+
+                </tr>
+
+            </thead>
+
+
+            <tbody>
+
+                {% for item in category_data %}
+
+                <tr>
+
+                    <td>
+                        {{ item["category"] }}
+                    </td>
+
+                    <td>
+                        ₹{{ "%.2f"|format(item["total"]) }}
+                    </td>
+
+                </tr>
+
+                {% else %}
+
+                <tr>
+
+                    <td
+                        colspan="2"
+                        style="text-align:center;"
+                    >
+                        No expense data available.
+                    </td>
+
+                </tr>
+
+                {% endfor %}
+
+            </tbody>
+
+        </table>
+
+    </div>
+
+
+    <section class="page-header">
+
+        <h2>
+            Monthly Summary
+        </h2>
+
+    </section>
+
+
+    <div class="table-container">
+
+        <table>
+
+            <thead>
+
+                <tr>
+
+                    <th>
+                        Month
+                    </th>
+
+                    <th>
+                        Total Expense
+                    </th>
+
+                </tr>
+
+            </thead>
+
+
+            <tbody>
+
+                {% for item in monthly_data %}
+
+                <tr>
+
+                    <td>
+                        {{ item["month"] }}
+                    </td>
+
+                    <td>
+                        ₹{{ "%.2f"|format(item["total"]) }}
+                    </td>
+
+                </tr>
+
+                {% else %}
+
+                <tr>
+
+                    <td
+                        colspan="2"
+                        style="text-align:center;"
+                    >
+                        No monthly data available.
+                    </td>
+
+                </tr>
+
+                {% endfor %}
+
+            </tbody>
+
+        </table>
+
+    </div>
+
+</main>
+
+
+<footer>
+
+    <p>
+        © 2026 Smart Expense Analyzer
+    </p>
+
+</footer>
+
+</body>
+
+</html>

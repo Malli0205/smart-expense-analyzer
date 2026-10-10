@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Smart Expense Analyzer</title>
+
+    <link
+        rel="stylesheet"
+        href="{{ url_for('static', filename='css/style.css') }}"
+    >
+</head>
+
+<body>
+
+<nav class="navbar">
+
+    <div class="container">
+
+        <a href="{{ url_for('home') }}" class="logo">
+            💰 Smart Expense Analyzer
+        </a>
+
+        <div class="nav-links">
+
+            <a href="{{ url_for('home') }}">
+                Dashboard
+            </a>
+
+            <a href="{{ url_for('transactions') }}">
+                Transactions
+            </a>
+
+            <a href="{{ url_for('analysis') }}">
+                Analysis
+            </a>
+
+        </div>
+
+    </div>
+
+</nav>
+
+
+<main class="container">
+
+    <section class="page-header">
+
+        <h1>
+            Welcome Back 👋
+        </h1>
+
+        <p>
+            Manage your income, expenses and spending in one place.
+        </p>
+
+    </section>
+
+
+    <div class="quick-actions">
+
+        <a
+            href="{{ url_for('add_income') }}"
+            class="btn"
+        >
+            + Add Income
+        </a>
+
+        <a
+            href="{{ url_for('add_expense') }}"
+            class="btn"
+        >
+            + Add Expense
+        </a>
+
+        <a
+            href="{{ url_for('transactions') }}"
+            class="btn"
+        >
+            View Transactions
+        </a>
+
+    </div>
+
+
+    <section class="dashboard-cards">
+
+        <div class="card">
+
+            <h3>
+                Total Income
+            </h3>
+
+            <h2>
+                ₹{{ "%.2f"|format(total_income) }}
+            </h2>
+
+            <p>
+                This Month
+            </p>
+
+        </div>
+
+
+        <div class="card">
+
+            <h3>
+                Total Expenses
+            </h3>
+
+            <h2>
+                ₹{{ "%.2f"|format(total_expenses) }}
+            </h2>
+
+            <p>
+                This Month
+            </p>
+
+        </div>
+
+
+        <div class="card">
+
+            <h3>
+                Remaining Balance
+            </h3>
+
+            <h2>
+                ₹{{ "%.2f"|format(remaining_balance) }}
+            </h2>
+
+            <p>
+                Available Balance
+            </p>
+
+        </div>
+
+
+        <div class="card">
+
+            <h3>
+                Savings
+            </h3>
+
+            <h2>
+                ₹{{ "%.2f"|format(savings) }}
+            </h2>
+
+            <p>
+                Current Savings
+            </p>
+
+        </div>
+
+    </section>
+
+
+    <section class="page-header">
+
+        <h2>
+            Expense Categories
+        </h2>
+
+        <p>
+            Your spending by category for this month.
+        </p>
+
+    </section>
+
+
+    <div class="category-grid">
+
+        <div class="category-card">
+            <h3>🍔 Food</h3>
+            <p>
+                ₹{{ "%.2f"|format(category_totals["Food"]) }}
+            </p>
+        </div>
+
+
+        <div class="category-card">
+            <h3>🚗 Travel</h3>
+            <p>
+                ₹{{ "%.2f"|format(category_totals["Travel"]) }}
+            </p>
+        </div>
+
+
+        <div class="category-card">
+            <h3>🛍️ Shopping</h3>
+            <p>
+                ₹{{ "%.2f"|format(category_totals["Shopping"]) }}
+            </p>
+        </div>
+
+
+        <div class="category-card">
+            <h3>📚 Education</h3>
+            <p>
+                ₹{{ "%.2f"|format(category_totals["Education"]) }}
+            </p>
+        </div>
+
+
+        <div class="category-card">
+            <h3>💡 Bills & Utilities</h3>
+            <p>
+                ₹{{ "%.2f"|format(category_totals["Bills & Utilities"]) }}
+            </p>
+        </div>
+
+
+        <div class="category-card">
+            <h3>🏥 Health</h3>
+            <p>
+                ₹{{ "%.2f"|format(category_totals["Health"]) }}
+            </p>
+        </div>
+
+
+        <div class="category-card">
+            <h3>🎬 Entertainment</h3>
+            <p>
+                ₹{{ "%.2f"|format(category_totals["Entertainment"]) }}
+            </p>
+        </div>
+
+
+        <div class="category-card">
+            <h3>🏠 Home</h3>
+            <p>
+                ₹{{ "%.2f"|format(category_totals["Home"]) }}
+            </p>
+        </div>
+
+    </div>
+
+
+    <section class="page-header">
+
+        <h2>
+            Manage Your Money
+        </h2>
+
+        <p>
+            Add new transactions or view your complete history.
+        </p>
+
+    </section>
+
+
+    <div class="quick-actions">
+
+        <a
+            href="{{ url_for('add_income') }}"
+            class="btn"
+        >
+            💰 Add Income
+        </a>
+
+        <a
+            href="{{ url_for('add_expense') }}"
+            class="btn"
+        >
+            💸 Add Expense
+        </a>
+
+        <a
+            href="{{ url_for('transactions') }}"
+            class="btn"
+        >
+            📋 Transaction History
+        </a>
+
+        <a
+            href="{{ url_for('analysis') }}"
+            class="btn"
+        >
+            📊 View Analysis
+        </a>
+
+    </div>
+
+</main>
+
+
+<footer>
+
+    <p>
+        © 2026 Smart Expense Analyzer
+    </p>
+
+</footer>
+
+</body>
+
+</html>

@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Transactions - Smart Expense Analyzer</title>
+
+    <link
+        rel="stylesheet"
+        href="{{ url_for('static', filename='css/style.css') }}"
+    >
+</head>
+
+<body>
+
+<nav class="navbar">
+
+    <div class="container">
+
+        <a href="{{ url_for('home') }}" class="logo">
+            💰 Smart Expense Analyzer
+        </a>
+
+        <div class="nav-links">
+
+            <a href="{{ url_for('home') }}">
+                Dashboard
+            </a>
+
+            <a href="{{ url_for('transactions') }}">
+                Transactions
+            </a>
+
+            <a href="{{ url_for('analysis') }}">
+                Analysis
+            </a>
+
+        </div>
+
+    </div>
+
+</nav>
+
+
+<main class="container">
+
+    <section class="page-header">
+
+        <h1>
+            Transaction History
+        </h1>
+
+        <p>
+            View and manage your transaction history.
+        </p>
+
+    </section>
+
+
+    <div class="quick-actions">
+
+        <a
+            href="{{ url_for('add_income') }}"
+            class="btn"
+        >
+            + Add Income
+        </a>
+
+        <a
+            href="{{ url_for('add_expense') }}"
+            class="btn"
+        >
+            + Add Expense
+        </a>
+
+    </div>
+
+
+    <div class="card">
+
+        <h2>
+            Filter Transactions
+        </h2>
+
+        <form
+            method="GET"
+            action="{{ url_for('transactions') }}"
+        >
+
+            <div class="form-group">
+
+                <label for="month">
+                    Month
+                </label>
+
+                <select
+                    name="month"
+                    id="month"
+                    required
+                >
+
+                    <option value="">
+                        Select Month
+                    </option>
+
+                    {% set months = [
+                        ("01", "January"),
+                        ("02", "February"),
+                        ("03", "March"),
+                        ("04", "April"),
+                        ("05", "May"),
+                        ("06", "June"),
+                        ("07", "July"),
+                        ("08", "August"),
+                        ("09", "September"),
+                        ("10", "October"),
+                        ("11", "November"),
+                        ("12", "December")
+                    ] %}
+
+                    {% for value, name in months %}
+
+                    <option
+                        value="{{ value }}"
+                        {% if selected_month == value %}
+                        selected
+                        {% endif %}
+                    >
+                        {{ name }}
+                    </option>
+
+                    {% endfor %}
+
+                </select>
+
+            </div>
+
+
+            <div class="form-group">
+
+                <label for="year">
+                    Year
+                </label>
+
+                <select
+                    name="year"
+                    id="year"
+                    required
+                >
+
+                    <option value="">
+                        Select Year
+                    </option>
+
+                    {% for year in years %}
+
+                    <option
+                        value="{{ year }}"
+                        {% if selected_year == year|string %}
+                        selected
+                        {% endif %}
+                    >
+                        {{ year }}
+                    </option>
+
+                    {% endfor %}
+
+                </select>
+
+            </div>
+
+
+            <button
+                type="submit"
+                class="btn"
+            >
+                View Month
+            </button>
+
+
+            <a
+                href="{{ url_for('transactions') }}"
+                class="btn"
+            >
+                Show All
+            </a>
+
+        </form>
+
+    </div>
+
+
+    {% if selected_month and selected_year %}
+
+    <div class="dashboard-cards">
+
+        <div class="card">
+
+            <h3>
+                Monthly Income
+            </h3>
+
+            <h2>
+                ₹{{ "%.2f"|format(monthly_income) }}
+            </h2>
+
+        </div>
+
+
+        <div class="card">
+
+            <h3>
+                Monthly Expenses
+            </h3>
+
+            <h2>
+                ₹{{ "%.2f"|format(monthly_expenses) }}
+            </h2>
+
+        </div>
+
+
+        <div class="card">
+
+            <h3>
+                Monthly Balance
+            </h3>
+
+            <h2>
+                ₹{{ "%.2f"|format(monthly_balance) }}
+            </h2>
+
+        </div>
+
+    </div>
+
+    {% endif %}
+
+
+    <div class="table-container">
+
+        <table>
+
+            <thead>
+
+                <tr>
+
+                    <th>
+                        ID
+                    </th>
+
+                    <th>
+                        Date
+                    </th>
+
+                    <th>
+                        Type
+                    </th>
+
+                    <th>
+                        Category
+                    </th>
+
+                    <th>
+                        Sub Category
+                    </th>
+
+                    <th>
+                        Amount
+                    </th>
+
+                    <th>
+                        Description
+                    </th>
+
+                    <th>
+                        Action
+                    </th>
+
+                </tr>
+
+            </thead>
+
+
+            <tbody>
+
+                {% for transaction in transactions %}
+
+                <tr>
+
+                    <td>
+                        {{ transaction["id"] }}
+                    </td>
+
+                    <td>
+                        {{ transaction["date"] }}
+                    </td>
+
+                    <td>
+                        {{ transaction["type"] }}
+                    </td>
+
+                    <td>
+                        {{ transaction["category"] }}
+                    </td>
+
+                    <td>
+                        {{ transaction["sub_category"] }}
+                    </td>
+
+                    <td>
+                        ₹{{ "%.2f"|format(transaction["amount"]) }}
+                    </td>
+
+                    <td>
+                        {{ transaction["description"] or "-" }}
+                    </td>
+
+                    <td>
+
+                        <form
+                            method="POST"
+                            action="{{ url_for(
+                                'delete_transaction',
+                                transaction_id=transaction['id']
+                            ) }}"
+                            onsubmit="return confirm(
+                                'Remove this transaction from history?'
+                            );"
+                        >
+
+                            <button
+                                type="submit"
+                                class="btn"
+                            >
+                                🗑️ Delete
+                            </button>
+
+                        </form>
+
+                    </td>
+
+                </tr>
+
+                {% else %}
+
+                <tr>
+
+                    <td
+                        colspan="8"
+                        style="text-align:center;"
+                    >
+                        No transactions found.
+                    </td>
+
+                </tr>
+
+                {% endfor %}
+
+            </tbody>
+
+        </table>
+
+    </div>
+
+</main>
+
+
+<footer>
+
+    <p>
+        ©  Smart Expense Analyzer
+    </p>
+
+</footer>
+
+</body>
+
+</html>

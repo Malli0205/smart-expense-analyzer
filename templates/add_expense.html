@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Add Expense - Smart Expense Analyzer</title>
+
+    <link
+        rel="stylesheet"
+        href="{{ url_for('static', filename='css/style.css') }}"
+    >
+</head>
+
+<body>
+
+<nav class="navbar">
+
+    <div class="container">
+
+        <a href="{{ url_for('home') }}" class="logo">
+            💰 Smart Expense Analyzer
+        </a>
+
+        <div class="nav-links">
+
+            <a href="{{ url_for('home') }}">
+                Dashboard
+            </a>
+
+            <a href="{{ url_for('transactions') }}">
+                Transactions
+            </a>
+
+            <a href="{{ url_for('analysis') }}">
+                Analysis
+            </a>
+
+        </div>
+
+    </div>
+
+</nav>
+
+
+<main class="container">
+
+    <section class="page-header">
+
+        <h1>
+            Add Expense
+        </h1>
+
+        <p>
+            Record your spending and keep track of your expenses.
+        </p>
+
+    </section>
+
+
+    <div class="card">
+
+        <form
+            method="POST"
+            action="{{ url_for('add_expense') }}"
+        >
+
+            <div class="form-group">
+
+                <label for="date">
+                    Date
+                </label>
+
+                <input
+                    type="date"
+                    id="date"
+                    name="date"
+                    required
+                >
+
+            </div>
+
+
+            <div class="form-group">
+
+                <label for="category">
+                    Category
+                </label>
+
+                <select
+                    id="category"
+                    name="category"
+                    required
+                >
+
+                    <option value="">
+                        Select Category
+                    </option>
+
+                    <option value="Food">
+                        Food
+                    </option>
+
+                    <option value="Travel">
+                        Travel
+                    </option>
+
+                    <option value="Shopping">
+                        Shopping
+                    </option>
+
+                    <option value="Education">
+                        Education
+                    </option>
+
+                    <option value="Bills & Utilities">
+                        Bills & Utilities
+                    </option>
+
+                    <option value="Health">
+                        Health
+                    </option>
+
+                    <option value="Entertainment">
+                        Entertainment
+                    </option>
+
+                    <option value="Home">
+                        Home
+                    </option>
+
+                </select>
+
+            </div>
+
+
+            <div class="form-group">
+
+                <label for="sub_category">
+                    Sub Category
+                </label>
+
+                <select
+                    id="sub_category"
+                    name="sub_category"
+                    required
+                >
+
+                    <option value="">
+                        Select Sub Category
+                    </option>
+
+                </select>
+
+            </div>
+
+
+            <div class="form-group">
+
+                <label for="amount">
+                    Amount (₹)
+                </label>
+
+                <input
+                    type="number"
+                    id="amount"
+                    name="amount"
+                    step="0.01"
+                    min="0"
+                    placeholder="Enter amount"
+                    required
+                >
+
+            </div>
+
+
+            <div class="form-group">
+
+                <label for="description">
+                    Description
+                </label>
+
+                <textarea
+                    id="description"
+                    name="description"
+                    rows="4"
+                    placeholder="Enter description (optional)"
+                ></textarea>
+
+            </div>
+
+
+            <div class="quick-actions">
+
+                <button
+                    type="submit"
+                    class="btn"
+                >
+                    💸 Add Expense
+                </button>
+
+                <a
+                    href="{{ url_for('home') }}"
+                    class="btn"
+                >
+                    Cancel
+                </a>
+
+            </div>
+
+        </form>
+
+    </div>
+
+</main>
+
+
+<footer>
+
+    <p>
+        © 2026 Smart Expense Analyzer
+    </p>
+
+</footer>
+
+
+<script
+    src="{{ url_for('static', filename='js/script.js') }}"
+></script>
+
+</body>
+
+</html>
