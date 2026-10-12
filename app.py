@@ -793,14 +793,14 @@ def analysis():
 
 if __name__ == "__main__":
 
-    # Start automatic sync only in Flask's main
-    # debug process to avoid running it twice.
-    if not app.debug or (
-        app.debug and
-        __import__("os").environ.get(
-            "WERKZEUG_RUN_MAIN"
-        ) == "true"
-    ):
+    import os
+
+    is_main_process = (
+        not app.debug
+        or os.environ.get("WERKZEUG_RUN_MAIN") == "true"
+    )
+
+    if is_main_process:
 
         sync_thread = threading.Thread(
             target=automatic_sync,
@@ -810,5 +810,7 @@ if __name__ == "__main__":
         sync_thread.start()
 
     app.run(
-        debug=True
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000)),
+        debug=False
     )
