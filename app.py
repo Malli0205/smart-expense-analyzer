@@ -1,15 +1,14 @@
 from flask import Flask, render_template, request, redirect, jsonify
-import urllib.request
-import json
+from datetime import datetime, timedelta
+import os
 import threading
 import time
-from datetime import datetime, timedelta
 
 from database import (
     get_connection,
     create_table,
     add_deleted_column,
-    add_transaction_id_column
+    add_transaction_id_column,
 )
 
 from analysis_utils import (
@@ -17,12 +16,10 @@ from analysis_utils import (
     monthly_expense_analysis,
     create_category_chart,
     create_monthly_chart,
-    create_income_expense_chart
+    create_income_expense_chart,
 )
 
-
 app = Flask(__name__)
-
 
 # =========================================================
 # DATABASE SETUP
@@ -32,27 +29,74 @@ create_table()
 add_deleted_column()
 add_transaction_id_column()
 
+# =========================================================
+# MOCK FINANCIAL DATA
+# Demo data only. This is NOT connected to a real bank.
+# Keep this list in the main app so it works without a
+# separate mock_api.py server during local testing.
+# =========================================================
+
+MOCK_TRANSACTIONS = [
+    {
+        "transaction_id": "TXN001",
+        "date": "2026-10-05",
+        "type": "Expense",
+        "amount": 500,
+        "merchant": "Biryani Restaurant",
+        "description": "Biryani",
+    },
+    {
+        "transaction_id": "TXN002",
+        "date": "2026-10-05",
+        "type": "Expense",
+        "amount": 250,
+        "merchant": "Uber",
+        "description": "Cab ride",
+    },
+    {
+        "transaction_id": "TXN003",
+        "date": "2026-10-05",
+        "type": "Expense",
+        "amount": 1200,
+        "merchant": "Amazon",
+        "description": "Shopping",
+    },
+    {
+        "transaction_id": "TXN004",
+        "date": "2026-10-05",
+        "type": "Expense",
+        "amount": 649,
+        "merchant": "Netflix",
+        "description": "OTT subscription",
+    },
+    {
+        "transaction_id": "TXN005",
+        "date": "2026-10-05",
+        "type": "Income",
+        "amount": 30000,
+        "merchant": "Company Salary",
+        "description": "Monthly salary",
+    },
+]
 
 # =========================================================
-# DELETE TRANSACTIONS OLDER THAN 2 YEARS
+# DELETE TRANSACTIONS OLDER THAN TWO YEARS
 # =========================================================
 
 def clear_old_transactions():
-
     connection = get_connection()
-    cursor = connection.cursor()
-
-    cutoff_date = (
-        datetime.today() - timedelta(days=730)
-    ).strftime("%Y-%m-%d")
-
-    cursor.execute("""
-        DELETE FROM transactions
-        WHERE date < ?
-    """, (cutoff_date,))
-
-    connection.commit()
-    connection.close()
+    try:
+        cursor = connection.cursor()
+        cutoff_date = (
+            datetime.today() - timedelta(days=730)
+        ).strftime("%Y-%m-%d")
+        cursor.execute(
+            "DELETE FROM transactions WHERE date < ?",
+            (cutoff_date,),
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 # =========================================================
@@ -60,45 +104,110 @@ def clear_old_transactions():
 # =========================================================
 
 def categorize_transaction(transaction):
-
-    transaction_type = transaction["type"]
-    merchant = transaction["merchant"].lower()
-
-    # -------------------------
-    # INCOME
-    # -------------------------
+    transaction_type = transaction.get("type", "Expense")
+    merchant = str(transaction.get("merchant", "")).lower()
 
     if transaction_type == "Income":
-
         if "salary" in merchant or "company" in merchant:
             return "Income", "Salary"
-
         return "Income", "Other"
 
-    # -------------------------
-    # EXPENSES
-    # -------------------------
-
-    if "biryani" in merchant:
+    if any(word in merchant for word in ("biryani", "swiggy", "zomato")):
         return "Food", "Restaurant"
-
-    elif "swiggy" in merchant:
-        return "Food", "Restaurant"
-
-    elif "zomato" in merchant:
-        return "Food", "Restaurant"
-
-    elif "uber" in merchant:
+    if "uber" in merchant:
         return "Travel", "Cab"
-
-    elif "amazon" in merchant:
+    if "amazon" in merchant:
         return "Shopping", "Online Shopping"
-
-    elif "netflix" in merchant:
+    if "netflix" in merchant:
         return "Entertainment", "OTT Subscription"
 
-    else:
-        return "Other", "Other"
+    return "Other", "Other"
+
+
+# =========================================================
+# TRANSACTION SYNC HELPER
+# =========================================================
+
+def sync_transaction_data(transactions):
+    """Insert unseen transactions and skip IDs already in the database."""
+    added_count = 0
+    skipped_count = 0
+
+    connection = get_connection()
+    try:
+        cursor = connection.cursor()
+
+        for transaction in transactions:
+            transaction_id = transaction.get("transaction_id")
+            if not transaction_id:
+                # An external transaction ID is required for safe deduplication.
+                skipped_count += 1
+                continue
+
+            cursor.execute(
+                "SELECT id FROM transactions WHERE transaction_id = ?",
+                (transaction_id,),
+            )
+            if cursor.fetchone():
+                skipped_count += 1
+                continue
+
+            date = transaction.get("date")
+            transaction_type = transaction.get("type")
+            amount = transaction.get("amount")
+            merchant = transaction.get("merchant", "")
+            description = transaction.get("description", "")
+
+            if not date or transaction_type not in ("Income", "Expense"):
+                skipped_count += 1
+                continue
+
+            try:
+                amount = float(amount)
+            except (TypeError, ValueError):
+                skipped_count += 1
+                continue
+
+            if amount < 0:
+                skipped_count += 1
+                continue
+
+            category, sub_category = categorize_transaction(transaction)
+
+            cursor.execute(
+                """
+                INSERT INTO transactions (
+                    transaction_id, date, type, category, sub_category,
+                    amount, description, is_deleted
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                """,
+                (
+                    transaction_id,
+                    date,
+                    transaction_type,
+                    category,
+                    sub_category,
+                    amount,
+                    description,
+                ),
+            )
+            added_count += 1
+
+        connection.commit()
+    finally:
+        connection.close()
+
+    return added_count, skipped_count
+
+
+# =========================================================
+# MOCK API ENDPOINT
+# =========================================================
+
+@app.route("/api/mock-transactions", methods=["GET"])
+def mock_transactions():
+    return jsonify(MOCK_TRANSACTIONS)
 
 
 # =========================================================
@@ -106,104 +215,27 @@ def categorize_transaction(transaction):
 # =========================================================
 
 def automatic_sync():
-
+    """Demo sync loop. It checks the mock feed once every 60 seconds."""
     print("Automatic transaction sync started.")
 
     while True:
-
         try:
-
-            api_url = (
-                "http://127.0.0.1:5001/"
-                "api/mock-transactions"
+            added_count, skipped_count = sync_transaction_data(
+                MOCK_TRANSACTIONS
             )
-
-            # Get transactions from financial API
-            with urllib.request.urlopen(api_url) as response:
-
-                data = json.loads(
-                    response.read().decode("utf-8")
-                )
-
-            connection = get_connection()
-            cursor = connection.cursor()
-
-            added_count = 0
-
-            for transaction in data:
-
-                transaction_id = transaction["transaction_id"]
-
-                # Check duplicate
-                cursor.execute("""
-                    SELECT id
-                    FROM transactions
-                    WHERE transaction_id = ?
-                """, (transaction_id,))
-
-                existing_transaction = cursor.fetchone()
-
-                if existing_transaction:
-
-                    continue
-
-                # Automatically categorize
-                category, sub_category = (
-                    categorize_transaction(transaction)
-                )
-
-                # Insert transaction
-                cursor.execute("""
-                    INSERT INTO transactions
-                    (
-                        transaction_id,
-                        date,
-                        type,
-                        category,
-                        sub_category,
-                        amount,
-                        description,
-                        is_deleted
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    transaction_id,
-                    transaction["date"],
-                    transaction["type"],
-                    category,
-                    sub_category,
-                    transaction["amount"],
-                    transaction["description"],
-                    0
-                ))
-
-                added_count += 1
-
-            connection.commit()
-            connection.close()
-
-            if added_count > 0:
-
+            if added_count:
                 print(
-                    f"Automatic sync: "
-                    f"{added_count} new transaction(s) added."
+                    f"Automatic sync: {added_count} transaction(s) added; "
+                    f"{skipped_count} skipped."
                 )
-
             else:
-
                 print(
-                    "Automatic sync: "
-                    "No new transactions."
+                    "Automatic sync: No new transactions; "
+                    f"{skipped_count} already processed or invalid."
                 )
-
         except Exception as error:
+            print(f"Automatic sync error: {error}")
 
-            print(
-                "Automatic sync error:",
-                error
-            )
-
-        # Wait 60 seconds
         time.sleep(60)
 
 
@@ -213,78 +245,71 @@ def automatic_sync():
 
 @app.route("/")
 def home():
-
     clear_old_transactions()
 
     selected_month = request.args.get("month")
     selected_year = request.args.get("year")
 
     if not selected_month or not selected_year:
-
         current_date = datetime.today()
-
         selected_month = current_date.strftime("%m")
         selected_year = current_date.strftime("%Y")
 
-    month_pattern = f"{selected_year}-{selected_month}-%"
+    month_pattern = f"{selected_year}-{selected_month.zfill(2)}-%"
 
     connection = get_connection()
-    cursor = connection.cursor()
+    try:
+        cursor = connection.cursor()
 
-    # Total income
-    cursor.execute("""
-        SELECT COALESCE(SUM(amount), 0)
-        FROM transactions
-        WHERE type = 'Income'
-        AND date LIKE ?
-    """, (month_pattern,))
-
-    total_income = cursor.fetchone()[0]
-
-    # Total expenses
-    cursor.execute("""
-        SELECT COALESCE(SUM(amount), 0)
-        FROM transactions
-        WHERE type = 'Expense'
-        AND date LIKE ?
-    """, (month_pattern,))
-
-    total_expenses = cursor.fetchone()[0]
-
-    # Remaining balance
-    remaining_balance = (
-        total_income - total_expenses
-    )
-
-    # Savings
-    savings = remaining_balance
-
-    categories = [
-        "Food",
-        "Travel",
-        "Shopping",
-        "Education",
-        "Bills & Utilities",
-        "Health",
-        "Entertainment",
-        "Home"
-    ]
-
-    category_totals = {}
-
-    for category in categories:
-
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT COALESCE(SUM(amount), 0)
             FROM transactions
-            WHERE type = 'Expense'
-            AND category = ?
-            AND date LIKE ?
-        """, (category, month_pattern))
+            WHERE type = 'Income' AND date LIKE ?
+            """,
+            (month_pattern,),
+        )
+        total_income = cursor.fetchone()[0]
 
-        category_totals[category] = cursor.fetchone()[0]
+        cursor.execute(
+            """
+            SELECT COALESCE(SUM(amount), 0)
+            FROM transactions
+            WHERE type = 'Expense' AND date LIKE ?
+            """,
+            (month_pattern,),
+        )
+        total_expenses = cursor.fetchone()[0]
 
-    connection.close()
+        remaining_balance = total_income - total_expenses
+        savings = remaining_balance
+
+        categories = [
+            "Food",
+            "Travel",
+            "Shopping",
+            "Education",
+            "Bills & Utilities",
+            "Health",
+            "Entertainment",
+            "Home",
+        ]
+        category_totals = {}
+
+        for category in categories:
+            cursor.execute(
+                """
+                SELECT COALESCE(SUM(amount), 0)
+                FROM transactions
+                WHERE type = 'Expense'
+                  AND category = ?
+                  AND date LIKE ?
+                """,
+                (category, month_pattern),
+            )
+            category_totals[category] = cursor.fetchone()[0]
+    finally:
+        connection.close()
 
     return render_template(
         "index.html",
@@ -294,190 +319,113 @@ def home():
         savings=savings,
         category_totals=category_totals,
         selected_month=selected_month,
-        selected_year=selected_year
+        selected_year=selected_year,
     )
 
 
 # =========================================================
-# RECEIVE SINGLE TRANSACTION
+# RECEIVE A SINGLE TRANSACTION
 # =========================================================
 
-@app.route(
-    "/api/receive-transaction",
-    methods=["POST"]
-)
+@app.route("/api/receive-transaction", methods=["POST"])
 def receive_transaction():
+    data = request.get_json(silent=True) or {}
 
-    data = request.get_json()
+    required_fields = ("date", "type", "amount", "merchant", "description")
+    missing = [field for field in required_fields if field not in data]
+    if missing:
+        return jsonify({
+            "message": "Missing required fields",
+            "missing_fields": missing,
+        }), 400
 
-    date = data["date"]
     transaction_type = data["type"]
-    amount = data["amount"]
-    merchant = data["merchant"]
-    description = data["description"]
+    if transaction_type not in ("Income", "Expense"):
+        return jsonify({"message": "type must be Income or Expense"}), 400
 
     transaction_id = data.get("transaction_id")
 
-    category, sub_category = (
-        categorize_transaction(data)
-    )
-
-    connection = get_connection()
-    cursor = connection.cursor()
-
-    # Check duplicate transaction
     if transaction_id:
-
-        cursor.execute("""
-            SELECT id
-            FROM transactions
-            WHERE transaction_id = ?
-        """, (transaction_id,))
-
-        existing_transaction = cursor.fetchone()
-
-        if existing_transaction:
-
+        connection = get_connection()
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                "SELECT id FROM transactions WHERE transaction_id = ?",
+                (transaction_id,),
+            )
+            if cursor.fetchone():
+                return jsonify({
+                    "message": "Transaction already exists",
+                    "transaction_id": transaction_id,
+                    "duplicate": True,
+                }), 200
+        finally:
             connection.close()
 
-            return jsonify({
-                "message": "Transaction already exists",
-                "transaction_id": transaction_id
-            })
+    category, sub_category = categorize_transaction(data)
 
-    cursor.execute("""
-        INSERT INTO transactions
-        (
-            transaction_id,
-            date,
-            type,
-            category,
-            sub_category,
-            amount,
-            description,
-            is_deleted
+    try:
+        amount = float(data["amount"])
+        if amount < 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify({"message": "amount must be a non-negative number"}), 400
+
+    connection = get_connection()
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            INSERT INTO transactions (
+                transaction_id, date, type, category, sub_category,
+                amount, description, is_deleted
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+            """,
+            (
+                transaction_id,
+                data["date"],
+                transaction_type,
+                category,
+                sub_category,
+                amount,
+                data["description"],
+            ),
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        transaction_id,
-        date,
-        transaction_type,
-        category,
-        sub_category,
-        amount,
-        description,
-        0
-    ))
-
-    connection.commit()
-    connection.close()
+        connection.commit()
+    finally:
+        connection.close()
 
     return jsonify({
         "message": "Transaction received successfully",
         "transaction_id": transaction_id,
-        "date": date,
+        "date": data["date"],
         "type": transaction_type,
         "amount": amount,
-        "merchant": merchant,
+        "merchant": data["merchant"],
         "category": category,
-        "sub_category": sub_category
-    })
+        "sub_category": sub_category,
+    }), 201
 
 
 # =========================================================
 # MANUAL SYNC API
 # =========================================================
 
-@app.route(
-    "/api/sync-transactions",
-    methods=["POST"]
-)
+@app.route("/api/sync-transactions", methods=["POST"])
 def sync_transactions():
-
     try:
-
-        api_url = (
-            "http://127.0.0.1:5001/"
-            "api/mock-transactions"
-        )
-
-        with urllib.request.urlopen(api_url) as response:
-
-            data = json.loads(
-                response.read().decode("utf-8")
-            )
-
-        connection = get_connection()
-        cursor = connection.cursor()
-
-        added_count = 0
-        skipped_count = 0
-
-        for transaction in data:
-
-            transaction_id = transaction["transaction_id"]
-
-            # Check duplicate
-            cursor.execute("""
-                SELECT id
-                FROM transactions
-                WHERE transaction_id = ?
-            """, (transaction_id,))
-
-            existing_transaction = cursor.fetchone()
-
-            if existing_transaction:
-
-                skipped_count += 1
-
-                continue
-
-            # Categorize
-            category, sub_category = (
-                categorize_transaction(transaction)
-            )
-
-            # Insert
-            cursor.execute("""
-                INSERT INTO transactions
-                (
-                    transaction_id,
-                    date,
-                    type,
-                    category,
-                    sub_category,
-                    amount,
-                    description,
-                    is_deleted
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                transaction_id,
-                transaction["date"],
-                transaction["type"],
-                category,
-                sub_category,
-                transaction["amount"],
-                transaction["description"],
-                0
-            ))
-
-            added_count += 1
-
-        connection.commit()
-        connection.close()
-
+        added_count, skipped_count = sync_transaction_data(MOCK_TRANSACTIONS)
         return jsonify({
             "message": "Transaction sync completed",
             "added": added_count,
-            "skipped_duplicates": skipped_count
+            "skipped_duplicates_or_invalid": skipped_count,
         })
-
     except Exception as error:
-
+        app.logger.exception("Transaction sync failed")
         return jsonify({
             "message": "Transaction sync failed",
-            "error": str(error)
+            "error": str(error),
         }), 500
 
 
@@ -487,9 +435,7 @@ def sync_transactions():
 
 @app.route("/add-expense", methods=["GET", "POST"])
 def add_expense():
-
     if request.method == "POST":
-
         date = request.form["date"]
         category = request.form["category"]
         sub_category = request.form["sub_category"]
@@ -497,40 +443,23 @@ def add_expense():
         description = request.form["description"]
 
         connection = get_connection()
-        cursor = connection.cursor()
-
-        cursor.execute("""
-            INSERT INTO transactions
-            (
-                date,
-                type,
-                category,
-                sub_category,
-                amount,
-                description,
-                is_deleted
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                INSERT INTO transactions (
+                    date, type, category, sub_category,
+                    amount, description, is_deleted
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 0)
+                """,
+                (date, "Expense", category, sub_category, amount, description),
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            date,
-            "Expense",
-            category,
-            sub_category,
-            amount,
-            description,
-            0
-        ))
+            connection.commit()
+        finally:
+            connection.close()
 
-        connection.commit()
-        connection.close()
-
-        selected_year = date[:4]
-        selected_month = date[5:7]
-
-        return redirect(
-            f"/?month={selected_month}"
-            f"&year={selected_year}"
-        )
+        return redirect(f"/?month={date[5:7]}&year={date[:4]}")
 
     return render_template("add_expense.html")
 
@@ -541,9 +470,7 @@ def add_expense():
 
 @app.route("/add-income", methods=["GET", "POST"])
 def add_income():
-
     if request.method == "POST":
-
         date = request.form["date"]
         category = request.form["category"]
         sub_category = request.form["sub_category"]
@@ -551,40 +478,23 @@ def add_income():
         description = request.form["description"]
 
         connection = get_connection()
-        cursor = connection.cursor()
-
-        cursor.execute("""
-            INSERT INTO transactions
-            (
-                date,
-                type,
-                category,
-                sub_category,
-                amount,
-                description,
-                is_deleted
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                INSERT INTO transactions (
+                    date, type, category, sub_category,
+                    amount, description, is_deleted
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 0)
+                """,
+                (date, "Income", category, sub_category, amount, description),
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            date,
-            "Income",
-            category,
-            sub_category,
-            amount,
-            description,
-            0
-        ))
+            connection.commit()
+        finally:
+            connection.close()
 
-        connection.commit()
-        connection.close()
-
-        selected_year = date[:4]
-        selected_month = date[5:7]
-
-        return redirect(
-            f"/?month={selected_month}"
-            f"&year={selected_year}"
-        )
+        return redirect(f"/?month={date[5:7]}&year={date[:4]}")
 
     return render_template("add_income.html")
 
@@ -595,103 +505,73 @@ def add_income():
 
 @app.route("/transactions")
 def transactions():
-
     selected_month = request.args.get("month")
     selected_year = request.args.get("year")
-
     current_year = datetime.today().year
-
-    years = list(
-        range(
-            current_year,
-            current_year - 10,
-            -1
-        )
-    )
+    years = list(range(current_year, current_year - 10, -1))
 
     connection = get_connection()
-    cursor = connection.cursor()
+    try:
+        cursor = connection.cursor()
 
-    if selected_month and selected_year:
+        if selected_month and selected_year:
+            month_pattern = f"{selected_year}-{selected_month.zfill(2)}-%"
+            cursor.execute(
+                """
+                SELECT id, date, type, category, sub_category, amount, description
+                FROM transactions
+                WHERE date LIKE ? AND is_deleted = 0
+                ORDER BY date DESC, id DESC
+                """,
+                (month_pattern,),
+            )
+            transaction_rows = cursor.fetchall()
 
-        month_pattern = (
-            f"{selected_year}-"
-            f"{selected_month.zfill(2)}-%"
-        )
+            cursor.execute(
+                """
+                SELECT COALESCE(SUM(amount), 0)
+                FROM transactions
+                WHERE type = 'Income' AND date LIKE ?
+                """,
+                (month_pattern,),
+            )
+            monthly_income = cursor.fetchone()[0]
 
-        cursor.execute("""
-            SELECT
-                id,
-                date,
-                type,
-                category,
-                sub_category,
-                amount,
-                description
-            FROM transactions
-            WHERE date LIKE ?
-            AND is_deleted = 0
-            ORDER BY date DESC, id DESC
-        """, (month_pattern,))
+            cursor.execute(
+                """
+                SELECT COALESCE(SUM(amount), 0)
+                FROM transactions
+                WHERE type = 'Expense' AND date LIKE ?
+                """,
+                (month_pattern,),
+            )
+            monthly_expenses = cursor.fetchone()[0]
+        else:
+            cursor.execute(
+                """
+                SELECT id, date, type, category, sub_category, amount, description
+                FROM transactions
+                WHERE is_deleted = 0
+                ORDER BY date DESC, id DESC
+                """
+            )
+            transaction_rows = cursor.fetchall()
+            monthly_income = 0
+            monthly_expenses = 0
+    finally:
+        connection.close()
 
-    else:
-
-        cursor.execute("""
-            SELECT
-                id,
-                date,
-                type,
-                category,
-                sub_category,
-                amount,
-                description
-            FROM transactions
-            WHERE is_deleted = 0
-            ORDER BY date DESC, id DESC
-        """)
-
-    transactions = cursor.fetchall()
-
-    if selected_month and selected_year:
-
-        cursor.execute("""
-            SELECT COALESCE(SUM(amount), 0)
-            FROM transactions
-            WHERE type = 'Income'
-            AND date LIKE ?
-        """, (month_pattern,))
-
-        monthly_income = cursor.fetchone()[0]
-
-        cursor.execute("""
-            SELECT COALESCE(SUM(amount), 0)
-            FROM transactions
-            WHERE type = 'Expense'
-            AND date LIKE ?
-        """, (month_pattern,))
-
-        monthly_expenses = cursor.fetchone()[0]
-
-    else:
-
-        monthly_income = 0
-        monthly_expenses = 0
-
-    monthly_balance = (
-        monthly_income - monthly_expenses
-    )
-
-    connection.close()
+    monthly_balance = monthly_income - monthly_expenses
 
     return render_template(
         "transaction.html",
-        transactions=transactions,
+        transactions=transaction_rows,
         selected_month=selected_month,
         selected_year=selected_year,
         monthly_income=monthly_income,
         monthly_expenses=monthly_expenses,
         monthly_balance=monthly_balance,
-        years=years
+        years=years,
     )
 
 
@@ -699,23 +579,18 @@ def transactions():
 # DELETE / HIDE TRANSACTION
 # =========================================================
 
-@app.route(
-    "/delete-transaction/<int:transaction_id>",
-    methods=["POST"]
-)
+@app.route("/delete-transaction/<int:transaction_id>", methods=["POST"])
 def delete_transaction(transaction_id):
-
     connection = get_connection()
-    cursor = connection.cursor()
-
-    cursor.execute("""
-        UPDATE transactions
-        SET is_deleted = 1
-        WHERE id = ?
-    """, (transaction_id,))
-
-    connection.commit()
-    connection.close()
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            "UPDATE transactions SET is_deleted = 1 WHERE id = ?",
+            (transaction_id,),
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
     return redirect("/transactions")
 
@@ -726,64 +601,36 @@ def delete_transaction(transaction_id):
 
 @app.route("/analysis")
 def analysis():
-
     connection = get_connection()
-    cursor = connection.cursor()
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE type = 'Income'"
+        )
+        total_income = cursor.fetchone()[0]
 
-    # Total income
-    cursor.execute("""
-        SELECT COALESCE(SUM(amount), 0)
-        FROM transactions
-        WHERE type = 'Income'
-    """)
+        cursor.execute(
+            "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE type = 'Expense'"
+        )
+        total_expenses = cursor.fetchone()[0]
+    finally:
+        connection.close()
 
-    total_income = cursor.fetchone()[0]
+    remaining_balance = total_income - total_expenses
+    category_data = category_expense_analysis()
+    monthly_data = monthly_expense_analysis()
 
-    # Total expenses
-    cursor.execute("""
-        SELECT COALESCE(SUM(amount), 0)
-        FROM transactions
-        WHERE type = 'Expense'
-    """)
-
-    total_expenses = cursor.fetchone()[0]
-
-    remaining_balance = (
-        total_income - total_expenses
-    )
-
-    connection.close()
-
-    # Analytics
-    category_data = (
-        category_expense_analysis()
-    )
-
-    monthly_data = (
-        monthly_expense_analysis()
-    )
-
-    # Charts
     create_category_chart()
     create_monthly_chart()
     create_income_expense_chart()
-
-    # Convert DataFrames
-    category_data = category_data.to_dict(
-        orient="records"
-    )
-
-    monthly_data = monthly_data.to_dict(
-        orient="records"
-    )
 
     return render_template(
         "analysis.html",
         total_income=total_income,
         total_expenses=total_expenses,
         remaining_balance=remaining_balance,
-        category_data=category_data,
-        monthly_data=monthly_data
+        category_data=category_data.to_dict(orient="records"),
+        monthly_data=monthly_data.to_dict(orient="records"),
     )
 
 
@@ -792,25 +639,14 @@ def analysis():
 # =========================================================
 
 if __name__ == "__main__":
-
-    import os
-
-    is_main_process = (
-        not app.debug
-        or os.environ.get("WERKZEUG_RUN_MAIN") == "true"
-    )
-
-    if is_main_process:
-
-        sync_thread = threading.Thread(
-            target=automatic_sync,
-            daemon=True
-        )
-
-        sync_thread.start()
+    # Start one background sync thread when running locally.
+    # For Render/Gunicorn, use a separate worker or scheduler
+    # instead of starting background loops in each web worker.
+    sync_thread = threading.Thread(target=automatic_sync, daemon=True)
+    sync_thread.start()
 
     app.run(
         host="0.0.0.0",
         port=int(os.environ.get("PORT", 5000)),
-        debug=False
+        debug=False,
     )
