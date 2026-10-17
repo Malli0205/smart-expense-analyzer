@@ -1,14 +1,21 @@
-from flask import Flask, render_template, request, redirect, jsonify
+from flask import Flask, render_template, request, redirect, jsonify, session, flash
+from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
 import os
 import threading
 import time
+from flask import send_file
+from werkzeug.utils import secure_filename
+from pypdf import PdfReader
+import io
+import re
 
 from database import (
     get_connection,
     create_table,
     add_deleted_column,
     add_transaction_id_column,
+    add_user_id_column,
 )
 
 from analysis_utils import (
@@ -19,7 +26,19 @@ from analysis_utils import (
     create_income_expense_chart,
 )
 
+from functools import wraps
+
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "dev-only-change-this-key")
+
+def login_required(view_function):
+    @wraps(view_function)
+    def wrapped_view(*args, **kwargs):
+        if "user_id" not in session:
+            return redirect("/login")
+        return view_function(*args, **kwargs)
+    return wrapped_view
+
 
 # =========================================================
 # DATABASE SETUP
@@ -28,6 +47,7 @@ app = Flask(__name__)
 create_table()
 add_deleted_column()
 add_transaction_id_column()
+add_user_id_column()
 
 # =========================================================
 # MOCK FINANCIAL DATA
@@ -84,19 +104,7 @@ MOCK_TRANSACTIONS = [
 # =========================================================
 
 def clear_old_transactions():
-    connection = get_connection()
-    try:
-        cursor = connection.cursor()
-        cutoff_date = (
-            datetime.today() - timedelta(days=730)
-        ).strftime("%Y-%m-%d")
-        cursor.execute(
-            "DELETE FROM transactions WHERE date < ?",
-            (cutoff_date,),
-        )
-        connection.commit()
-    finally:
-        connection.close()
+    pass
 
 
 # =========================================================
@@ -243,7 +251,95 @@ def automatic_sync():
 # DASHBOARD
 # =========================================================
 
+# USER REGISTRATION
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+
+        if not name or not email or len(password) < 8:
+            flash("Enter valid details. Password must be at least 8 characters.")
+            return redirect("/register")
+
+        connection = get_connection()
+        try:
+            cursor = connection.cursor()
+
+            cursor.execute(
+                "SELECT id FROM users WHERE email = ?",
+                (email,)
+            )
+
+            if cursor.fetchone():
+                flash("This email is already registered.")
+                return redirect("/register")
+
+            password_hash = generate_password_hash(password)
+
+            cursor.execute(
+                """
+                INSERT INTO users (name, email, password_hash)
+                VALUES (?, ?, ?)
+                """,
+                (name, email, password_hash)
+            )
+
+            connection.commit()
+
+        finally:
+            connection.close()
+
+        flash("Registration successful! Please log in.")
+        return redirect("/login")
+
+    return render_template("register.html")
+    
+# USER LOGIN
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+
+        connection = get_connection()
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                "SELECT id, name, email, password_hash FROM users WHERE email = ?",
+                (email,)
+            )
+            user = cursor.fetchone()
+        finally:
+            connection.close()
+
+        if user and check_password_hash(user["password_hash"], password):
+            session.clear()
+            session["user_id"] = user["id"]
+            session["user_name"] = user["name"]
+            return redirect("/")
+
+        flash("Invalid email or password.")
+        return redirect("/login")
+
+    return render_template("login.html")
+
+
+# USER LOGOUT
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    flash("You have been logged out.")
+    return redirect("/login")
+
+
+
 @app.route("/")
+@login_required
 def home():
     clear_old_transactions()
 
@@ -258,26 +354,35 @@ def home():
     month_pattern = f"{selected_year}-{selected_month.zfill(2)}-%"
 
     connection = get_connection()
+
     try:
         cursor = connection.cursor()
 
+        # Total income for the logged-in user
         cursor.execute(
             """
             SELECT COALESCE(SUM(amount), 0)
             FROM transactions
-            WHERE type = 'Income' AND date LIKE ?
+            WHERE user_id = ?
+              AND type = 'Income'
+              AND date LIKE ?
+              AND is_deleted = 0
             """,
-            (month_pattern,),
+            (session["user_id"], month_pattern),
         )
         total_income = cursor.fetchone()[0]
 
+        # Total expenses for the logged-in user
         cursor.execute(
             """
             SELECT COALESCE(SUM(amount), 0)
             FROM transactions
-            WHERE type = 'Expense' AND date LIKE ?
+            WHERE user_id = ?
+              AND type = 'Expense'
+              AND date LIKE ?
+              AND is_deleted = 0
             """,
-            (month_pattern,),
+            (session["user_id"], month_pattern),
         )
         total_expenses = cursor.fetchone()[0]
 
@@ -294,20 +399,26 @@ def home():
             "Entertainment",
             "Home",
         ]
+
         category_totals = {}
 
+        # Category totals for the logged-in user only
         for category in categories:
             cursor.execute(
                 """
                 SELECT COALESCE(SUM(amount), 0)
                 FROM transactions
-                WHERE type = 'Expense'
+                WHERE user_id = ?
+                  AND type = 'Expense'
                   AND category = ?
                   AND date LIKE ?
+                  AND is_deleted = 0
                 """,
-                (category, month_pattern),
+                (session["user_id"], category, month_pattern),
             )
+
             category_totals[category] = cursor.fetchone()[0]
+
     finally:
         connection.close()
 
@@ -433,7 +544,9 @@ def sync_transactions():
 # ADD EXPENSE
 # =========================================================
 
+
 @app.route("/add-expense", methods=["GET", "POST"])
+@login_required
 def add_expense():
     if request.method == "POST":
         date = request.form["date"]
@@ -448,12 +561,20 @@ def add_expense():
             cursor.execute(
                 """
                 INSERT INTO transactions (
-                    date, type, category, sub_category,
+                    user_id, date, type, category, sub_category,
                     amount, description, is_deleted
                 )
-                VALUES (?, ?, ?, ?, ?, ?, 0)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0)
                 """,
-                (date, "Expense", category, sub_category, amount, description),
+                (
+                    session["user_id"],
+                    date,
+                    "Expense",
+                    category,
+                    sub_category,
+                    amount,
+                    description,
+                ),
             )
             connection.commit()
         finally:
@@ -468,7 +589,9 @@ def add_expense():
 # ADD INCOME
 # =========================================================
 
+
 @app.route("/add-income", methods=["GET", "POST"])
+@login_required
 def add_income():
     if request.method == "POST":
         date = request.form["date"]
@@ -483,12 +606,20 @@ def add_income():
             cursor.execute(
                 """
                 INSERT INTO transactions (
-                    date, type, category, sub_category,
+                    user_id, date, type, category, sub_category,
                     amount, description, is_deleted
                 )
-                VALUES (?, ?, ?, ?, ?, ?, 0)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0)
                 """,
-                (date, "Income", category, sub_category, amount, description),
+                (
+                    session["user_id"],
+                    date,
+                    "Income",
+                    category,
+                    sub_category,
+                    amount,
+                    description,
+                ),
             )
             connection.commit()
         finally:
@@ -504,6 +635,7 @@ def add_income():
 # =========================================================
 
 @app.route("/transactions")
+@login_required
 def transactions():
     selected_month = request.args.get("month")
     selected_year = request.args.get("year")
@@ -520,10 +652,10 @@ def transactions():
                 """
                 SELECT id, date, type, category, sub_category, amount, description
                 FROM transactions
-                WHERE date LIKE ? AND is_deleted = 0
+                WHERE user_id = ? AND date LIKE ? AND is_deleted = 0
                 ORDER BY date DESC, id DESC
                 """,
-                (month_pattern,),
+                (session["user_id"], month_pattern),
             )
             transaction_rows = cursor.fetchall()
 
@@ -531,9 +663,9 @@ def transactions():
                 """
                 SELECT COALESCE(SUM(amount), 0)
                 FROM transactions
-                WHERE type = 'Income' AND date LIKE ?
+                WHERE user_id = ? AND type = 'Income' AND date LIKE ?
                 """,
-                (month_pattern,),
+                (session["user_id"], month_pattern),
             )
             monthly_income = cursor.fetchone()[0]
 
@@ -541,9 +673,9 @@ def transactions():
                 """
                 SELECT COALESCE(SUM(amount), 0)
                 FROM transactions
-                WHERE type = 'Expense' AND date LIKE ?
+               WHERE user_id = ? AND type = 'Expense' AND date LIKE ?
                 """,
-                (month_pattern,),
+               (session["user_id"], month_pattern),
             )
             monthly_expenses = cursor.fetchone()[0]
         else:
@@ -551,9 +683,11 @@ def transactions():
                 """
                 SELECT id, date, type, category, sub_category, amount, description
                 FROM transactions
-                WHERE is_deleted = 0
+                WHERE user_id = ? AND is_deleted = 0
                 ORDER BY date DESC, id DESC
-                """
+                """ ,
+                (session["user_id"],)
+
             )
             transaction_rows = cursor.fetchall()
             monthly_income = 0
@@ -579,14 +713,20 @@ def transactions():
 # DELETE / HIDE TRANSACTION
 # =========================================================
 
+
 @app.route("/delete-transaction/<int:transaction_id>", methods=["POST"])
+@login_required
 def delete_transaction(transaction_id):
     connection = get_connection()
     try:
         cursor = connection.cursor()
         cursor.execute(
-            "UPDATE transactions SET is_deleted = 1 WHERE id = ?",
-            (transaction_id,),
+            """
+            UPDATE transactions
+            SET is_deleted = 1
+            WHERE id = ? AND user_id = ? AND is_deleted = 0
+            """,
+            (transaction_id, session["user_id"]),
         )
         connection.commit()
     finally:
@@ -595,34 +735,57 @@ def delete_transaction(transaction_id):
     return redirect("/transactions")
 
 
+
 # =========================================================
 # ANALYSIS
 # =========================================================
 
+
+
 @app.route("/analysis")
+@login_required
 def analysis():
     connection = get_connection()
+
     try:
         cursor = connection.cursor()
+        user_id = session["user_id"]
+
         cursor.execute(
-            "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE type = 'Income'"
+            """
+            SELECT COALESCE(SUM(amount), 0)
+            FROM transactions
+            WHERE user_id = ?
+              AND type = 'Income'
+              AND is_deleted = 0
+            """,
+            (user_id,)
         )
         total_income = cursor.fetchone()[0]
 
         cursor.execute(
-            "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE type = 'Expense'"
+            """
+            SELECT COALESCE(SUM(amount), 0)
+            FROM transactions
+            WHERE user_id = ?
+              AND type = 'Expense'
+              AND is_deleted = 0
+            """,
+            (user_id,)
         )
         total_expenses = cursor.fetchone()[0]
+
     finally:
         connection.close()
 
     remaining_balance = total_income - total_expenses
-    category_data = category_expense_analysis()
-    monthly_data = monthly_expense_analysis()
 
-    create_category_chart()
-    create_monthly_chart()
-    create_income_expense_chart()
+    category_data = category_expense_analysis(user_id)
+    monthly_data = monthly_expense_analysis(user_id)
+
+    create_category_chart(user_id)
+    create_monthly_chart(user_id)
+    create_income_expense_chart(user_id)
 
     return render_template(
         "analysis.html",
@@ -631,7 +794,218 @@ def analysis():
         remaining_balance=remaining_balance,
         category_data=category_data.to_dict(orient="records"),
         monthly_data=monthly_data.to_dict(orient="records"),
+        category_chart=f"category_expenses_{user_id}.png",
+        monthly_chart=f"monthly_expenses_{user_id}.png",
+        income_expense_chart=f"income_vs_expense_{user_id}.png",
     )
+    
+@app.route("/upload-statement", methods=["GET", "POST"])
+@login_required
+def upload_statement():
+    if request.method == "POST":
+        uploaded_file = request.files.get("statement")
+
+        if not uploaded_file or not uploaded_file.filename:
+            flash("Please select a PDF file.")
+            return redirect("/upload-statement")
+
+        if not uploaded_file.filename.lower().endswith(".pdf"):
+            flash("Please upload a PDF file only.")
+            return redirect("/upload-statement")
+
+        try:
+            pdf_bytes = uploaded_file.read()
+
+            if not pdf_bytes.startswith(b"%PDF-"):
+                flash("The selected file is not a valid PDF.")
+                return redirect("/upload-statement")
+
+            reader = PdfReader(io.BytesIO(pdf_bytes))
+
+            if reader.is_encrypted:
+                flash("Encrypted PDFs are not supported yet.")
+                return redirect("/upload-statement")
+
+            extracted_text = "\n".join(
+                page.extract_text() or ""
+                for page in reader.pages
+            )
+
+            if not extracted_text.strip():
+                flash(
+                    "No selectable text found. "
+                    "This may be a scanned PDF; OCR support is needed."
+                )
+                return redirect("/upload-statement")
+
+            return render_template(
+                "statement_preview.html",
+                extracted_text=extracted_text[:50000]
+            )
+
+        except Exception:
+            flash("Could not read this PDF. Please try another statement.")
+            return redirect("/upload-statement")
+
+    return render_template("upload_statement.html")
+    
+
+@app.route("/import-statement", methods=["POST"])
+@login_required
+def import_statement():
+    extracted_text = request.form.get("extracted_text", "")
+
+    if not extracted_text.strip():
+        flash("No statement text found. Please upload the PDF again.")
+        return redirect("/upload-statement")
+
+    # Match PhonePe transaction records
+    pattern = re.compile(
+        r"(?m)^([A-Z][a-z]{2}\s+\d{1,2},\s+\d{4})\s*\n"
+        r"\s*\d{1,2}:\d{2}\s*(?:AM|PM)\s*\n"
+        r"\s*(DEBIT|CREDIT)\s*\n"
+        r"\s*₹\s*([\d,]+(?:\.\d{1,2})?)\s*\n"
+        r"\s*(.*?)\s*\n"
+        r"(?:[^\n]*\n)*?"
+        r"\s*Transaction ID\s+([A-Za-z0-9]+)",
+        re.IGNORECASE
+    )
+
+    matches = list(pattern.finditer(extracted_text))
+
+    if not matches:
+        flash(
+            "No transactions could be recognized. "
+            "Please check the statement format."
+        )
+        return redirect("/upload-statement")
+
+    imported = 0
+    duplicates = 0
+    connection = get_connection()
+
+    try:
+        cursor = connection.cursor()
+
+        for match in matches:
+            (
+                date_text,
+                transaction_type,
+                amount_text,
+                description,
+                transaction_id
+            ) = match.groups()
+
+            try:
+                transaction_date = datetime.strptime(
+                    date_text.strip(), "%b %d, %Y"
+                ).strftime("%Y-%m-%d")
+
+                amount = float(amount_text.replace(",", ""))
+
+            except (ValueError, TypeError):
+                continue
+
+            if amount <= 0:
+                continue
+
+            transaction_type = transaction_type.upper()
+            description = description.strip()
+
+            # Assign a preliminary category
+            if transaction_type == "CREDIT":
+                db_type = "Income"
+                category = "Other"
+            else:
+                db_type = "Expense"
+                category = "Other"
+
+                text_to_check = description.lower()
+
+                if any(word in text_to_check for word in [
+                    "food", "restaurant", "hotel", "bakery", ""
+                    "grocery", "kirana", "cooldrinks", "Ice Creams", "Cool Drinks"
+                ]):
+                    category = "Food"
+
+                elif any(word in text_to_check for word in [
+                    "travel", "petrol", "fuel", "transport"
+                ]):
+                    category = "Travel"
+
+                elif any(word in text_to_check for word in [
+                    "shopping", "dress", "clothing"
+                ]):
+                    category = "Shopping"
+
+                elif any(word in text_to_check for word in [
+                    "college", "education", "school", "fee"
+                ]):
+                    category = "Education"
+
+                elif any(word in text_to_check for word in [
+                    "electricity", "water bill", "recharge"
+                ]):
+                    category = "Bills & Utilities"
+                elif any(word in text_to_check for word in [
+                    "home", "house", "rent", "furniture",
+                    "kitchen", "household", "cleaning"
+                ]):
+                    category = "Home"
+
+            # Transaction ID is used to prevent duplicate imports
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO transactions (
+                    transaction_id,
+                    user_id,
+                    date,
+                    type,
+                    category,
+                    sub_category,
+                    amount,
+                    description,
+                    is_deleted
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+                """,
+                (
+                    transaction_id,
+                    session["user_id"],
+                    transaction_date,
+                    db_type,
+                    category,
+                    category,
+                    amount,
+                    description
+                )
+            )
+
+            if cursor.rowcount == 1:
+                imported += 1
+            else:
+                duplicates += 1
+
+        connection.commit()
+
+    except Exception:
+        connection.rollback()
+        app.logger.exception("Statement import failed")
+        flash("Import failed. Please check the application logs.")
+        return redirect("/upload-statement")
+
+    finally:
+        connection.close()
+
+    flash(
+        f"Import complete: {imported} transactions imported; "
+        f"{duplicates} duplicates skipped."
+    )
+
+    return redirect("/transactions")
+
+
+
 
 
 # =========================================================

@@ -118,10 +118,7 @@
     <div class="chart-card">
 
         <img
-            src="{{ url_for(
-                'static',
-                filename='charts/category_expenses.png'
-            ) }}"
+            src="{{ url_for('static', filename='charts/' + category_chart) }}"
             alt="Category-wise Expenses Chart"
         >
 
@@ -144,11 +141,12 @@
     <div class="chart-card">
 
         <img
-            src="{{ url_for(
-                'static',
-                filename='charts/monthly_expenses.png'
-            ) }}"
-            alt="Monthly Expense Trend Chart"
+            
+
+        src="{{ url_for('static', filename='charts/' + monthly_chart) }}"
+        alt="Monthly Expense Trend Chart"
+>
+
         >
 
     </div>
@@ -170,11 +168,12 @@
     <div class="chart-card">
 
         <img
-            src="{{ url_for(
-                'static',
-                filename='charts/income_vs_expense.png'
-            ) }}"
-            alt="Income vs Expenses Chart"
+            
+
+        src="{{ url_for('static', filename='charts/' + income_expense_chart) }}"
+        alt="Income vs Expenses Chart"
+>
+
         >
 
     </div>

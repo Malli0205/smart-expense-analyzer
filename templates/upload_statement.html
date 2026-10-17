@@ -1,0 +1,71 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload Bank Statement</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f3f6fb;
+            margin: 0;
+            padding: 40px 16px;
+        }
+        .container {
+            max-width: 600px;
+            margin: 40px auto;
+            padding: 30px;
+            background: white;
+            border-radius: 14px;
+            box-shadow: 0 4px 18px #00000012;
+        }
+        h1 { color: #243b64; }
+        p { color: #555; line-height: 1.6; }
+        input[type="file"] {
+            display: block;
+            width: 100%;
+            margin: 24px 0;
+        }
+        button {
+            background: #2457c5;
+            color: white;
+            border: 0;
+            border-radius: 8px;
+            padding: 12px 20px;
+            cursor: pointer;
+        }
+        a { color: #2457c5; }
+        .warning { font-size: 13px; }
+    </style>
+</head>
+<body>
+    <main class="container">
+        <h1>Upload Bank Statement</h1>
+        <p>Select your bank statement in PDF format to extract transactions.</p>
+
+        <form action="{{ url_for('upload_statement') }}"
+              method="POST"
+              enctype="multipart/form-data">
+
+            <label for="statement">Bank statement PDF</label>
+            <input
+                id="statement"
+                type="file"
+                name="statement"
+                accept=".pdf,application/pdf"
+                required
+            >
+
+            <button type="submit">Upload and Preview</button>
+        </form>
+
+        <p class="warning">
+            Upload only a statement you are authorized to use.
+            Verify extracted details before saving transactions.
+        </p>
+
+        <a href="/">Back to Dashboard</a>
+    </main>
+</body>
+</html>

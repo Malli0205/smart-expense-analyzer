@@ -17,3 +17,4 @@ static/charts/*.png
 .vscode/
 .DS_Store
 Thumbs.db
+expense_backup.db

@@ -1,4 +1,7 @@
+
 Flask
 pandas
 matplotlib
 gunicorn
+Werkzeug
+pypdf

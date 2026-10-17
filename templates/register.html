@@ -1,0 +1,88 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create Account | Smart Expense Analyzer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f7fb;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+
+        .card {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            width: 340px;
+            box-shadow: 0 4px 18px #00000012;
+        }
+
+        h2 {
+            text-align: center;
+            color: #243b53;
+        }
+
+        input, button {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 12px;
+            margin-top: 12px;
+            border-radius: 6px;
+        }
+
+        input {
+            border: 1px solid #ccd4df;
+        }
+
+        button {
+            border: none;
+            background: #2563eb;
+            color: white;
+            cursor: pointer;
+        }
+
+        .message {
+            color: #c0392b;
+            font-size: 14px;
+        }
+
+        p {
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>Create Account</h2>
+
+        {% with messages = get_flashed_messages() %}
+            {% for message in messages %}
+                <p class="message">{{ message }}</p>
+            {% endfor %}
+        {% endwith %}
+
+        <form method="POST">
+            <input type="text" name="name"
+                   placeholder="Full name" required>
+
+            <input type="email" name="email"
+                   placeholder="Email address" required>
+
+            <input type="password" name="password"
+                   placeholder="Password (minimum 8 characters)"
+                   minlength="8" required>
+
+            <button type="submit">Register</button>
+        </form>
+
+        <p>Already registered? <a href="/login">Login</a></p>
+    </div>
+</body>
+</html>
