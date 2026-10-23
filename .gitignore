@@ -18,3 +18,8 @@ static/charts/*.png
 .DS_Store
 Thumbs.db
 expense_backup.db
+venv/
+__pycache__/
+*.pyc
+.env
+*.db

@@ -1,0 +1,73 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Expense Coach</title>
+    <link rel="stylesheet"
+          href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<nav class="navbar">
+    <div class="container">
+        <a href="{{ url_for('home') }}" class="logo">💰 Smart Expense Analyzer</a>
+        <div class="nav-links">
+            <a href="{{ url_for('home') }}">Dashboard</a>
+            <a href="{{ url_for('transactions') }}">Transactions</a>
+            <a href="{{ url_for('analysis') }}">Analysis</a>
+            <a href="{{ url_for('logout') }}">Logout</a>
+        </div>
+    </div>
+</nav>
+
+<main class="container">
+    <section class="page-header">
+        <h1>🤖 AI Expense Coach</h1>
+        <p>Personalized insights based on your recorded transactions.</p>
+    </section>
+
+    <section class="dashboard-cards">
+        <div class="card">
+            <h3>Total Income</h3>
+            <h2>₹{{ "%.2f"|format(total_income) }}</h2>
+        </div>
+        <div class="card">
+            <h3>Total Expenses</h3>
+            <h2>₹{{ "%.2f"|format(total_expenses) }}</h2>
+        </div>
+        <div class="card">
+            <h3>Balance</h3>
+            <h2>₹{{ "%.2f"|format(total_income - total_expenses) }}</h2>
+        </div>
+    </section>
+
+    <section class="page-header">
+        <h2>Your Insights</h2>
+    </section>
+
+    {% for insight in insights %}
+        <div class="card">
+            <p>💡 {{ insight }}</p>
+        </div>
+    {% endfor %}
+
+    <section class="page-header">
+        <h2>Spending by Category</h2>
+    </section>
+
+    <div class="card">
+        {% for row in category_rows %}
+            <p>
+                <strong>{{ row["category"] }}</strong>
+                — ₹{{ "%.2f"|format(row["total"]) }}
+            </p>
+        {% else %}
+            <p>No expense transactions found yet.</p>
+        {% endfor %}
+    </div>
+
+    <p><a class="btn" href="{{ url_for('home') }}">Back to Dashboard</a></p>
+</main>
+</body>
+</html>

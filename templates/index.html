@@ -57,6 +57,17 @@
         <a href="{{ url_for('upload_statement') }}" class="btn">
             📄 Upload Bank Statement PDF
         </a>
+        
+        <form action="{{ url_for('recategorize_existing_transactions') }}" method="POST">
+            <button type="submit" class="btn"
+                onclick="return confirm('Update categories for your existing transactions?')">
+                🔄 Fix Existing Categories
+            </button>
+        </form>
+        <a href="{{ url_for('ai_coach') }}" class="btn">
+            🤖 AI Expense Coach
+        </a>
+
 
     </div>
 
@@ -133,6 +144,15 @@
         <div class="category-card">
             <h3>🏠 Home</h3>
             <p>₹{{ "%.2f"|format(category_totals["Home"]) }}</p>
+        </div>
+        <div class="category-card">
+            <h3>🏧 Cash & ATM</h3>
+            <p>₹{{ "%.2f"|format(category_totals["Cash & ATM"]) }}</p>
+        </div>
+
+        <div class="category-card">
+            <h3>📦 Other</h3>
+            <p>₹{{ "%.2f"|format(category_totals["Other"]) }}</p>
         </div>
 
     </div>

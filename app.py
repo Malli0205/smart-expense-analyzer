@@ -9,6 +9,7 @@ from werkzeug.utils import secure_filename
 from pypdf import PdfReader
 import io
 import re
+import hashlib
 
 from database import (
     get_connection,
@@ -111,25 +112,113 @@ def clear_old_transactions():
 # AUTOMATIC TRANSACTION CATEGORIZATION
 # =========================================================
 
-def categorize_transaction(transaction):
-    transaction_type = transaction.get("type", "Expense")
-    merchant = str(transaction.get("merchant", "")).lower()
 
-    if transaction_type == "Income":
-        if "salary" in merchant or "company" in merchant:
-            return "Income", "Salary"
+
+
+def categorize_transaction(transaction):
+    text = (
+        str(transaction.get("merchant", "")) + " " +
+        str(transaction.get("description", ""))
+    ).lower().strip()
+
+    transaction_type = str(transaction.get("type", "")).lower().strip()
+
+    # Income transactions
+    if transaction_type == "income":
         return "Income", "Other"
 
-    if any(word in merchant for word in ("biryani", "swiggy", "zomato")):
-        return "Food", "Restaurant"
-    if "uber" in merchant:
-        return "Travel", "Cab"
-    if "amazon" in merchant:
-        return "Shopping", "Online Shopping"
-    if "netflix" in merchant:
-        return "Entertainment", "OTT Subscription"
+    # Healthcare — check before general merchant rules
+    if any(word in text for word in [
+        "pharmacy", "medical", "hospital", "medicine",
+        "doctor", "clinic", "apollo", "lab test",
+        "diagnostic", "health centre", "health center"
+    ]):
+        return "Health", "Medical"
 
-    return "Other", "Other"
+    # ATM / cash withdrawal
+    if any(word in text for word in [
+        "atm cash withdrawal", "cash withdrawal",
+        "atm withdrawal"
+    ]):
+        return "Cash & ATM", "Cash Withdrawal"
+
+    # Education
+    if any(word in text for word in [
+        "college", "school", "tuition", "education",
+        "exam fee", "course fee", "online course",
+        "textbook", "stationery", "university",
+        "institute", "institution", "iit",
+        "educational"
+    ]):
+        return "Education", "Education"
+
+    # Bills and utilities
+    if any(word in text for word in [
+        "electricity", "water bill", "gas bill",
+        "recharge", "broadband", "internet bill",
+        "phone bill", "mobile bill", "rent payment",
+        "upi/rent", "utility bill"
+    ]):
+        if "rent" in text or "rent payment" in text:
+            return "Home", "Household"
+        return "Bills & Utilities", "Bills"
+
+    # Travel
+    if any(word in text for word in [
+        "uber", "ola", "rapido", "cab", "auto fare",
+        "petrol", "diesel", "fuel", "bus", "train",
+        "metro", "irctc", "transport", "ola cabs",
+        "toll"
+    ]):
+        return "Travel", "Transport"
+
+    # Entertainment
+    if any(word in text for word in [
+        "netflix", "prime video", "hotstar",
+        "movie", "cinema", "spotify", "gaming",
+        "jiosaavn", "movie tickets"
+    ]):
+        return "Entertainment", "Entertainment"
+
+    # Shopping, flowers and personal care
+    if any(word in text for word in [
+        "fancy", "bangles", "earrings", "jewellery",
+        "jewelry", "clothing", "clothes", "dress",
+        "shoes", "footwear", "amazon", "flipkart",
+        "shopping", "cosmetics", "shampoo", "perfume",
+        "flower shop", "flowers", "saree", "garments",
+        "boutique", "gift shop"
+    ]):
+        return "Shopping", "Personal Shopping"
+
+    # Food, groceries, bakeries and restaurants
+    if any(word in text for word in [
+        "food", "restaurant", "biryani", "swiggy",
+        "zomato", "coffee", "cafe", "tea shop",
+        "bakery", "milk", "curd", "vegetable",
+        "fruit", "grocery", "groceries", "kirana",
+        "general stores", "supermarket", "zepto",
+        "blinkit", "bigbasket", "instamart",
+        "ice cream", "ice creams", "icecream",
+        "chopsticks", "hotel", "mill",
+        "tiffin", "meals", "sweets", "juice",
+        "provision store", "fruits shop"
+    ]):
+        return "Food", "Groceries/Food"
+
+    # Home and household
+    if any(word in text for word in [
+        "rent", "furniture", "household",
+        "cleaning supplies", "kitchen items",
+        "home appliance"
+    ]):
+        return "Home", "Household"
+
+    # Do not guess a category for incomplete descriptions.
+    # Keep unknown merchants available for manual review.
+    return "Other", "Needs Review"
+
+
 
 
 # =========================================================
@@ -398,6 +487,8 @@ def home():
             "Health",
             "Entertainment",
             "Home",
+            "Cash & ATM",
+            "Other",
         ]
 
         category_totals = {}
@@ -848,7 +939,68 @@ def upload_statement():
             return redirect("/upload-statement")
 
     return render_template("upload_statement.html")
-    
+
+@app.route("/recategorize", methods=["POST"])
+@login_required
+def recategorize_existing_transactions():
+    connection = get_connection()
+
+    try:
+        cursor = connection.cursor()
+        user_id = session["user_id"]
+
+        cursor.execute("""
+            SELECT id, type, description, category, sub_category
+            FROM transactions
+            WHERE user_id = ?
+              AND is_deleted = 0
+        """, (user_id,))
+
+        rows = cursor.fetchall()
+        updated = 0
+
+        for row in rows:
+            description = (row["description"] or "").strip()
+
+            new_category, new_sub_category = categorize_transaction({
+                "type": row["type"],
+                "merchant": "",
+                "description": description
+            })
+
+            # Update only when the category actually changes
+            if (
+                new_category != row["category"]
+                or new_sub_category != row["sub_category"]
+            ):
+                cursor.execute("""
+                    UPDATE transactions
+                    SET category = ?, sub_category = ?
+                    WHERE id = ? AND user_id = ? AND is_deleted = 0
+                """, (
+                    new_category,
+                    new_sub_category,
+                    row["id"],
+                    user_id
+                ))
+
+                updated += cursor.rowcount
+
+        connection.commit()
+        flash(f"Successfully updated categories for {updated} transactions.")
+
+    except Exception:
+        connection.rollback()
+        app.logger.exception("Category update failed")
+        flash("Category update failed. Please check the application log.")
+
+    finally:
+        connection.close()
+
+    return redirect("/transactions")
+  
+
+
 
 @app.route("/import-statement", methods=["POST"])
 @login_required
@@ -859,112 +1011,210 @@ def import_statement():
         flash("No statement text found. Please upload the PDF again.")
         return redirect("/upload-statement")
 
-    # Match PhonePe transaction records
-    pattern = re.compile(
-        r"(?m)^([A-Z][a-z]{2}\s+\d{1,2},\s+\d{4})\s*\n"
-        r"\s*\d{1,2}:\d{2}\s*(?:AM|PM)\s*\n"
-        r"\s*(DEBIT|CREDIT)\s*\n"
-        r"\s*₹\s*([\d,]+(?:\.\d{1,2})?)\s*\n"
-        r"\s*(.*?)\s*\n"
-        r"(?:[^\n]*\n)*?"
-        r"\s*Transaction ID\s+([A-Za-z0-9]+)",
+    # Parser for our sample bank statement PDF
+    sample_pattern = re.compile(
+        r"(?m)^(\d{2}-\d{2}-\d{4})\s+"
+        r"(.+?)\s+"
+        r"(Debit|Credit)\s+"
+        r"[₹]?\s*([\d,]+(?:\.\d{1,2})?)\s*$",
         re.IGNORECASE
     )
 
-    matches = list(pattern.finditer(extracted_text))
+    transactions_to_import = []
 
-    if not matches:
+    # First, recognize the sample PDF format
+    for match in sample_pattern.finditer(extracted_text):
+        date_text, description, txn_type, amount_text = match.groups()
+
+        transactions_to_import.append({
+            "date": date_text,
+            "description": description.strip(),
+            "type": txn_type.title(),
+            "amount": amount_text,
+            "transaction_id": None,
+            "date_format": "%d-%m-%Y"
+        })
+
+    # If it is not our sample format, try a text-based PhonePe statement
+    if not transactions_to_import:
+        date_pattern = re.compile(
+            r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
+            r"\s+\d{1,2},\s+\d{4}\b",
+            re.IGNORECASE
+        )
+
+        date_matches = list(date_pattern.finditer(extracted_text))
+
+        for index, date_match in enumerate(date_matches):
+            block_start = date_match.start()
+            block_end = (
+                date_matches[index + 1].start()
+                if index + 1 < len(date_matches)
+                else len(extracted_text)
+            )
+            block = extracted_text[block_start:block_end]
+
+            type_match = re.search(
+                r"\b(DEBIT|CREDIT)\b", block, re.IGNORECASE
+            )
+            id_match = re.search(
+                r"(?:Transaction\s*ID|UPI\s*Transaction\s*ID|UTR)"
+                r"\s*[:#]?\s*([A-Za-z0-9_-]+)",
+                block,
+                re.IGNORECASE
+            )
+            amount_match = re.search(
+                r"₹\s*([\d,]+(?:\.\d{1,2})?)",
+                block
+            )
+
+            if not type_match or not amount_match:
+                continue
+
+            # Try to extract the payment description
+            description_match = re.search(
+                r"\b(Paid to|Received from|Received from|"
+                r"Paid by|Refund from)\s+(.+?)(?=\s+"
+                r"(?:DEBIT|CREDIT)\b|₹|\n|$)",
+                block,
+                re.IGNORECASE
+            )
+
+            if description_match:
+                description = (
+                    description_match.group(1) + " " +
+                    description_match.group(2)
+                ).strip()
+            else:
+                description = "PhonePe transaction"
+
+            transactions_to_import.append({
+                "date": date_match.group(0),
+                "description": description,
+                "type": type_match.group(1).title(),
+                "amount": amount_match.group(1),
+                "transaction_id": id_match.group(1) if id_match else None,
+                "date_format": "%b %d, %Y"
+            })
+
+    if not transactions_to_import:
         flash(
-            "No transactions could be recognized. "
-            "Please check the statement format."
+            "No transactions recognized. Please check the PDF text format."
         )
         return redirect("/upload-statement")
+        
+    # Identify a previously imported statement for this user
+    statement_hash = hashlib.sha256(
+        " ".join(extracted_text.split()).encode("utf-8")
+    ).hexdigest()
+
+    check_conn = get_connection()
+    try:
+        check_conn.execute("""
+            CREATE TABLE IF NOT EXISTS statement_imports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                statement_hash TEXT NOT NULL,
+                imported_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, statement_hash)
+            )
+        """)
+
+        already_imported = check_conn.execute("""
+            SELECT 1 FROM statement_imports
+            WHERE user_id = ? AND statement_hash = ?
+            LIMIT 1
+        """, (session["user_id"], statement_hash)).fetchone()
+
+        if already_imported:
+            flash("This statement was already imported. No duplicate import made.")
+            return redirect("/transactions")
+
+    finally:
+        check_conn.close()
+
+
 
     imported = 0
     duplicates = 0
+    invalid = 0
     connection = get_connection()
 
     try:
         cursor = connection.cursor()
 
-        for match in matches:
-            (
-                date_text,
-                transaction_type,
-                amount_text,
-                description,
-                transaction_id
-            ) = match.groups()
-
+        for txn in transactions_to_import:
             try:
                 transaction_date = datetime.strptime(
-                    date_text.strip(), "%b %d, %Y"
+                    txn["date"].strip(),
+                    txn["date_format"]
                 ).strftime("%Y-%m-%d")
 
-                amount = float(amount_text.replace(",", ""))
+                amount = float(txn["amount"].replace(",", ""))
 
             except (ValueError, TypeError):
+                invalid += 1
                 continue
 
             if amount <= 0:
+                invalid += 1
                 continue
 
-            transaction_type = transaction_type.upper()
-            description = description.strip()
+            description = txn["description"].strip()
+            transaction_type = txn["type"].lower()
+            text_to_check = description.lower()
 
-            # Assign a preliminary category
-            if transaction_type == "CREDIT":
+            
+            if transaction_type == "credit":
                 db_type = "Income"
-                category = "Other"
             else:
                 db_type = "Expense"
-                category = "Other"
 
-                text_to_check = description.lower()
+            category, sub_category = categorize_transaction({
+                "type": db_type,
+                "merchant": "",
+                "description": description
+            })
 
-                if any(word in text_to_check for word in [
-                    "food", "restaurant", "hotel", "bakery", ""
-                    "grocery", "kirana", "cooldrinks", "Ice Creams", "Cool Drinks"
-                ]):
-                    category = "Food"
 
-                elif any(word in text_to_check for word in [
-                    "travel", "petrol", "fuel", "transport"
-                ]):
-                    category = "Travel"
+            # Use the original PhonePe transaction ID when available.
+            # For sample statements, create a stable ID from row details.
+            transaction_id = txn["transaction_id"]
 
-                elif any(word in text_to_check for word in [
-                    "shopping", "dress", "clothing"
-                ]):
-                    category = "Shopping"
+            if not transaction_id:
+                
+                stable_text = (
+                    f'{session["user_id"]}|{transaction_date}|'
+                    f'{db_type}|{amount:.2f}|{description.lower()}'
+                )
+                transaction_id = "PDF-" + hashlib.sha256(
+                    stable_text.encode("utf-8")
+                ).hexdigest()[:32]
+                
+            # Skip an already-imported active transaction with identical details
+            
+            
 
-                elif any(word in text_to_check for word in [
-                    "college", "education", "school", "fee"
-                ]):
-                    category = "Education"
 
-                elif any(word in text_to_check for word in [
-                    "electricity", "water bill", "recharge"
-                ]):
-                    category = "Bills & Utilities"
-                elif any(word in text_to_check for word in [
-                    "home", "house", "rent", "furniture",
-                    "kitchen", "household", "cleaning"
-                ]):
-                    category = "Home"
+            cursor.execute(
+                """
+                SELECT 1
+                FROM transactions
+                WHERE user_id = ? AND transaction_id = ?
+                LIMIT 1
+                """,
+                (session["user_id"], transaction_id)
+            )
 
-            # Transaction ID is used to prevent duplicate imports
+            if cursor.fetchone():
+                duplicates += 1
+                continue
+
             cursor.execute(
                 """
                 INSERT OR IGNORE INTO transactions (
-                    transaction_id,
-                    user_id,
-                    date,
-                    type,
-                    category,
-                    sub_category,
-                    amount,
-                    description,
+                    transaction_id, user_id, date, type,
+                    category, sub_category, amount, description,
                     is_deleted
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
@@ -975,7 +1225,7 @@ def import_statement():
                     transaction_date,
                     db_type,
                     category,
-                    category,
+                    sub_category,
                     amount,
                     description
                 )
@@ -996,15 +1246,276 @@ def import_statement():
 
     finally:
         connection.close()
+        
+    mark_conn = get_connection()
+    try:
+        mark_conn.execute("""
+            INSERT OR IGNORE INTO statement_imports
+                (user_id, statement_hash)
+            VALUES (?, ?)
+        """, (session["user_id"], statement_hash))
+        mark_conn.commit()
+    finally:
+        mark_conn.close()
+
 
     flash(
-        f"Import complete: {imported} transactions imported; "
-        f"{duplicates} duplicates skipped."
+        f"Import complete: {imported} imported, "
+        f"{duplicates} duplicates skipped, "
+        f"{invalid} invalid rows skipped."
     )
-
     return redirect("/transactions")
 
 
+
+
+
+@app.route("/ai-coach")
+@login_required
+def ai_coach():
+    connection = get_connection()
+
+    try:
+        cursor = connection.cursor()
+        user_id = session["user_id"]
+
+        from calendar import monthrange
+
+        # Current and previous month date ranges
+        today = datetime.today().date()
+        current_start = today.replace(day=1)
+
+        if today.month == 1:
+            previous_year = today.year - 1
+            previous_month = 12
+        else:
+            previous_year = today.year
+            previous_month = today.month - 1
+
+        previous_start = datetime(
+            previous_year, previous_month, 1
+        ).date()
+
+        previous_end = previous_start.replace(
+            day=min(
+                today.day,
+                monthrange(previous_year, previous_month)[1]
+            )
+        )
+
+        current_start_str = current_start.isoformat()
+        today_str = today.isoformat()
+        previous_start_str = previous_start.isoformat()
+        previous_end_str = previous_end.isoformat()
+
+        # All-time income
+        cursor.execute("""
+            SELECT COALESCE(SUM(amount), 0)
+            FROM transactions
+            WHERE user_id = ?
+              AND type = 'Income'
+              AND is_deleted = 0
+        """, (user_id,))
+        total_income = cursor.fetchone()[0]
+
+        # All-time expenses
+        cursor.execute("""
+            SELECT COALESCE(SUM(amount), 0)
+            FROM transactions
+            WHERE user_id = ?
+              AND type = 'Expense'
+              AND is_deleted = 0
+        """, (user_id,))
+        total_expenses = cursor.fetchone()[0]
+
+        # Current month expenses
+        cursor.execute("""
+            SELECT COALESCE(SUM(amount), 0)
+            FROM transactions
+            WHERE user_id = ?
+              AND type = 'Expense'
+              AND is_deleted = 0
+              AND date >= ? AND date <= ?
+        """, (user_id, current_start_str, today_str))
+        current_expenses = cursor.fetchone()[0]
+
+        # Previous month expenses for the same number of days
+        cursor.execute("""
+            SELECT COALESCE(SUM(amount), 0)
+            FROM transactions
+            WHERE user_id = ?
+              AND type = 'Expense'
+              AND is_deleted = 0
+              AND date >= ? AND date <= ?
+        """, (user_id, previous_start_str, previous_end_str))
+        previous_expenses = cursor.fetchone()[0]
+
+        # Current month category totals
+        cursor.execute("""
+            SELECT category, COALESCE(SUM(amount), 0) AS total
+            FROM transactions
+            WHERE user_id = ?
+              AND type = 'Expense'
+              AND is_deleted = 0
+              AND date >= ? AND date <= ?
+            GROUP BY category
+            ORDER BY total DESC
+        """, (user_id, current_start_str, today_str))
+        category_rows = cursor.fetchall()
+
+        # Previous month category totals
+        cursor.execute("""
+            SELECT category, COALESCE(SUM(amount), 0) AS total
+            FROM transactions
+            WHERE user_id = ?
+              AND type = 'Expense'
+              AND is_deleted = 0
+              AND date >= ? AND date <= ?
+            GROUP BY category
+        """, (user_id, previous_start_str, previous_end_str))
+        previous_category_rows = cursor.fetchall()
+
+        previous_category_totals = {
+            row["category"]: row["total"]
+            for row in previous_category_rows
+        }
+
+        insights = []
+
+        # Exclude Other from category recommendations
+        meaningful_categories = [
+            row for row in category_rows
+            if row["category"]
+            and row["category"].strip().lower() != "other"
+        ]
+
+        # Highest spending category
+        if meaningful_categories:
+            highest = meaningful_categories[0]
+            insights.append(
+                f"Your highest spending category this month is "
+                f"{highest['category']} (₹{highest['total']:.2f}). "
+                f"Review this category to find possible savings."
+            )
+        else:
+            insights.append(
+                "Add categorized expenses to receive category-wise "
+                "saving suggestions."
+            )
+
+        # Compare current and previous month in rupees only
+        difference = current_expenses - previous_expenses
+
+        if previous_expenses > 0:
+            if difference > 0:
+                insights.append(
+                    f"Your expenses are ₹{difference:.2f} higher "
+                    f"than the same period last month. "
+                    f"Try a realistic savings goal of ₹5,000 next month "
+                    f"by reducing non-essential purchases."
+                )
+            elif difference < 0:
+                insights.append(
+                    f"Great work! You have spent "
+                    f"₹{abs(difference):.2f} less than the same "
+                    f"period last month. Try maintaining this habit."
+                )
+            else:
+                insights.append(
+                    "Your expenses are the same as the equivalent "
+                    "period last month. Try saving more by reducing "
+                    "non-essential purchases."
+                )
+        elif current_expenses > 0:
+            insights.append(
+                f"You have spent ₹{current_expenses:.2f} this month. "
+                f"There is no previous-period spending to compare."
+            )
+        else:
+            insights.append(
+                "No expenses have been recorded for the current "
+                "month so far."
+            )
+
+        # Compare category spending, excluding Other
+        category_changes = []
+
+        for row in meaningful_categories:
+            category = row["category"]
+            current_amount = row["total"]
+            previous_amount = previous_category_totals.get(
+                category, 0
+            )
+
+            if current_amount > previous_amount:
+                category_changes.append((
+                    category,
+                    current_amount - previous_amount,
+                    current_amount
+                ))
+
+        category_changes.sort(
+            key=lambda item: item[1],
+            reverse=True
+        )
+
+        if category_changes:
+            category, increase, current_amount = category_changes[0]
+
+            insights.append(
+                f"{category} spending increased by ₹{increase:.2f} "
+                f"compared with the same period last month. "
+                f"Reducing this category by ₹{increase:.2f} would "
+                f"bring it back to last month's spending level."
+            )
+
+        # All-time balance and savings information
+        savings = total_income - total_expenses
+
+        if total_income > 0:
+            if savings < 0:
+                insights.append(
+                    f"Your recorded expenses exceed your recorded "
+                    f"income by ₹{abs(savings):.2f}. Prioritize "
+                    f"essential expenses and review your budget."
+                )
+            else:
+                insights.append(
+                    f"Your recorded balance is ₹{savings:.2f}. "
+                    f"Try setting aside a fixed amount from "
+                    f"your future income for savings."
+                )
+        else:
+            insights.append(
+                "Record your income to calculate your balance "
+                "and plan your savings."
+            )
+
+        # Suggest saving 10% of the highest non-Other category
+        if meaningful_categories:
+            highest = meaningful_categories[0]
+            current_amount = highest["total"]
+
+            if current_amount > 0:
+                target = round(current_amount * 0.10, 2)
+
+                insights.append(
+                    f"Suggested saving goal: reduce spending in "
+                    f"{highest['category']} by ₹{target:.2f}. "
+                    f"This is a practical starting target based "
+                    f"on your current spending."
+                )
+
+        return render_template(
+            "ai_coach.html",
+            insights=insights,
+            total_income=total_income,
+            total_expenses=total_expenses,
+            category_rows=category_rows
+        )
+
+    finally:
+        connection.close()
 
 
 
