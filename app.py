@@ -17,6 +17,7 @@ from database import (
     add_deleted_column,
     add_transaction_id_column,
     add_user_id_column,
+    create_users_table,
 )
 
 from analysis_utils import (
@@ -45,10 +46,13 @@ def login_required(view_function):
 # DATABASE SETUP
 # =========================================================
 
+
 create_table()
 add_deleted_column()
 add_transaction_id_column()
+create_users_table()
 add_user_id_column()
+
 
 # =========================================================
 # MOCK FINANCIAL DATA
