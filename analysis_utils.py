@@ -1,17 +1,23 @@
-import sqlite3
+
 import os
+
 import pandas as pd
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from database import get_connection
 
-DATABASE_NAME = "expense.db"
-CHART_FOLDER = "static/charts"
 
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+CHART_FOLDER = os.path.join(BASE_DIR, "static", "charts")
 
 
 def load_transactions(user_id):
+    """Load active transactions belonging only to the requested user."""
 
-    connection = sqlite3.connect(DATABASE_NAME)
+    connection = get_connection()
 
     query = """
         SELECT
@@ -23,26 +29,33 @@ def load_transactions(user_id):
             amount,
             description
         FROM transactions
-        WHERE user_id = ?
-          AND is_deleted = 0
+        WHERE user_id = %s
+          AND COALESCE(is_deleted, 0) = 0
+        ORDER BY date DESC, id DESC
     """
 
     try:
-        df = pd.read_sql_query(
-            query,
-            connection,
-            params=(user_id,)
+        with connection.cursor() as cursor:
+            cursor.execute(query, (user_id,))
+            rows = cursor.fetchall()
+
+            columns = [
+                column.name
+                for column in cursor.description
+            ]
+
+        df = pd.DataFrame(
+            [tuple(row) for row in rows],
+            columns=columns
         )
+
     finally:
         connection.close()
 
     return df
 
 
-
-
 def category_expense_analysis(user_id):
-
     df = load_transactions(user_id)
 
     expenses = df[df["type"] == "Expense"].copy()
@@ -52,7 +65,7 @@ def category_expense_analysis(user_id):
 
     result = (
         expenses
-        .groupby("category")["amount"]
+        .groupby("category", dropna=False)["amount"]
         .sum()
         .reset_index()
         .rename(columns={"amount": "total"})
@@ -62,10 +75,7 @@ def category_expense_analysis(user_id):
     return result
 
 
-
-
 def monthly_expense_analysis(user_id):
-
     df = load_transactions(user_id)
 
     expenses = df[df["type"] == "Expense"].copy()
@@ -77,6 +87,11 @@ def monthly_expense_analysis(user_id):
         expenses["date"],
         errors="coerce"
     )
+
+    expenses = expenses.dropna(subset=["date"])
+
+    if expenses.empty:
+        return pd.DataFrame(columns=["month", "total"])
 
     expenses["month"] = (
         expenses["date"]
@@ -96,10 +111,7 @@ def monthly_expense_analysis(user_id):
     return result
 
 
-
-
 def create_category_chart(user_id):
-
     data = category_expense_analysis(user_id)
 
     os.makedirs(CHART_FOLDER, exist_ok=True)
@@ -120,23 +132,23 @@ def create_category_chart(user_id):
         )
         plt.axis("off")
     else:
-        plt.bar(data["category"], data["total"])
+        plt.bar(
+            data["category"].fillna("Uncategorized").astype(str),
+            data["total"]
+        )
         plt.title("Category-wise Expenses")
         plt.xlabel("Category")
         plt.ylabel("Amount (₹)")
         plt.xticks(rotation=30, ha="right")
         plt.tight_layout()
 
-    plt.savefig(chart_path, dpi=120)
+    plt.savefig(chart_path, dpi=120, bbox_inches="tight")
     plt.close()
 
     return chart_path
 
 
-
-
 def create_monthly_chart(user_id):
-
     data = monthly_expense_analysis(user_id)
 
     os.makedirs(CHART_FOLDER, exist_ok=True)
@@ -168,16 +180,13 @@ def create_monthly_chart(user_id):
         plt.xticks(rotation=30, ha="right")
         plt.tight_layout()
 
-    plt.savefig(chart_path, dpi=120)
+    plt.savefig(chart_path, dpi=120, bbox_inches="tight")
     plt.close()
 
     return chart_path
 
 
-
-
 def create_income_expense_chart(user_id):
-
     df = load_transactions(user_id)
 
     os.makedirs(CHART_FOLDER, exist_ok=True)
@@ -187,13 +196,13 @@ def create_income_expense_chart(user_id):
         f"income_vs_expense_{user_id}.png"
     )
 
-    income = df[
-        df["type"] == "Income"
-    ]["amount"].sum()
+    income = df.loc[
+        df["type"] == "Income", "amount"
+    ].sum()
 
-    expense = df[
-        df["type"] == "Expense"
-    ]["amount"].sum()
+    expense = df.loc[
+        df["type"] == "Expense", "amount"
+    ].sum()
 
     labels = ["Income", "Expenses"]
     values = [income, expense]
@@ -204,7 +213,7 @@ def create_income_expense_chart(user_id):
     plt.ylabel("Amount (₹)")
     plt.tight_layout()
 
-    plt.savefig(chart_path, dpi=120)
+    plt.savefig(chart_path, dpi=120, bbox_inches="tight")
     plt.close()
 
     return chart_path

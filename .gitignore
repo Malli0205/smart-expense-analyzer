@@ -23,3 +23,34 @@ __pycache__/
 *.pyc
 .env
 *.db
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python environment and cache
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local databases and backups
+*.db
+*.sqlite
+*.sqlite3
+
+# Local secrets and logs
+*.log
+# Local migration and diagnostic scripts
+check_duplicates.py
+migrate_data.py
+test_db.py
+database_before_postgres.py
+analysis_utils_before_postgres.py
+app_before_postgres.py
+app_old.py
+app_backup.py
+app_backup.py.py
+requirements_before_postgres.txt
+app_updated.py

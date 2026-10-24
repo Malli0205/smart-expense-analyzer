@@ -5,3 +5,5 @@ matplotlib
 gunicorn
 Werkzeug
 pypdf
+psycopg[binary]
+python-dotenv
