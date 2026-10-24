@@ -1629,6 +1629,10 @@ def upload_statement():
 
 
         try:
+            if uploaded_file.content_length and uploaded_file.content_length > 5 * 1024 * 1024:
+                flash("PDF size must be less than 5 MB.")
+                return redirect("/upload-statement")
+
 
             pdf_bytes = uploaded_file.read()
 
@@ -1641,6 +1645,11 @@ def upload_statement():
 
 
             reader = PdfReader(io.BytesIO(pdf_bytes))
+            
+            if len(reader.pages) > 30:
+                flash("PDF must contain 30 pages or fewer.")
+                return redirect("/upload-statement")
+
 
 
             if reader.is_encrypted:
@@ -1682,6 +1691,7 @@ def upload_statement():
 
 
         except Exception:
+            app.logger.exception("PDF upload failed")
 
             flash("Could not read this PDF. Please try another statement.")
 
@@ -1798,473 +1808,266 @@ def recategorize_existing_transactions():
 
 
 @app.route("/import-statement", methods=["POST"])
-
 @login_required
-
 def import_statement():
+    import time
 
+    import_started = time.perf_counter()
     extracted_text = request.form.get("extracted_text", "")
 
-
     if not extracted_text.strip():
-
         flash("No statement text found. Please upload the PDF again.")
-
         return redirect("/upload-statement")
 
+    try:
+        transactions_to_import = []
 
-    # Parser for our sample bank statement PDF
-
-    sample_pattern = re.compile(
-
-        r"(?m)^(\d{2}-\d{2}-\d{4})\s+"
-
-        r"(.+?)\s+"
-
-        r"(Debit|Credit)\s+"
-
-        r"[₹]?\s*([\d,]+(?:\.\d{1,2})?)\s*$",
-
-        re.IGNORECASE
-
-    )
-
-
-    transactions_to_import = []
-
-
-    # First, recognize the sample PDF format
-
-    for match in sample_pattern.finditer(extracted_text):
-
-        date_text, description, txn_type, amount_text = match.groups()
-
-
-        transactions_to_import.append({
-
-            "date": date_text,
-
-            "description": description.strip(),
-
-            "type": txn_type.title(),
-
-            "amount": amount_text,
-
-            "transaction_id": None,
-
-            "date_format": "%d-%m-%Y"
-
-        })
-
-
-    # If it is not our sample format, try a text-based PhonePe statement
-
-    if not transactions_to_import:
-
-        date_pattern = re.compile(
-
-            r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
-
-            r"\s+\d{1,2},\s+\d{4}\b",
-
-            re.IGNORECASE
-
+        # Parse sample bank statement format.
+        sample_pattern = re.compile(
+            r"(?m)^(\d{2}-\d{2}-\d{4})\s+"
+            r"(.+?)\s+"
+            r"(Debit|Credit)\s+"
+            r"[₹]?\s*([\d,]+(?:\.\d{1,2})?)\s*$",
+            re.IGNORECASE,
         )
 
-
-        date_matches = list(date_pattern.finditer(extracted_text))
-
-
-        for index, date_match in enumerate(date_matches):
-
-            block_start = date_match.start()
-
-            block_end = (
-
-                date_matches[index + 1].start()
-
-                if index + 1 < len(date_matches)
-
-                else len(extracted_text)
-
-            )
-
-            block = extracted_text[block_start:block_end]
-
-
-            type_match = re.search(
-
-                r"\b(DEBIT|CREDIT)\b", block, re.IGNORECASE
-
-            )
-
-            id_match = re.search(
-
-                r"(?:Transaction\s*ID|UPI\s*Transaction\s*ID|UTR)"
-
-                r"\s*[:#]?\s*([A-Za-z0-9\_-]+)",
-
-                block,
-
-                re.IGNORECASE
-
-            )
-
-            amount_match = re.search(
-
-                r"₹\s*([\d,]+(?:\.\d{1,2})?)",
-
-                block
-
-            )
-
-
-            if not type_match or not amount_match:
-
-                continue
-
-
-            # Try to extract the payment description
-
-            description_match = re.search(
-
-                r"\b(Paid to|Received from|Received from|"
-
-                r"Paid by|Refund from)\s+(.+?)(?=\s+"
-
-                r"(?:DEBIT|CREDIT)\b|₹|\n|$)",
-
-                block,
-
-                re.IGNORECASE
-
-            )
-
-
-            if description_match:
-
-                description = (
-
-                    description_match.group(1) + " " +
-
-                    description_match.group(2)
-
-                ).strip()
-
-            else:
-
-                description = "PhonePe transaction"
-
+        for match in sample_pattern.finditer(extracted_text):
+            date_text, description, txn_type, amount_text = match.groups()
 
             transactions_to_import.append({
-
-                "date": date_match.group(0),
-
-                "description": description,
-
-                "type": type_match.group(1).title(),
-
-                "amount": amount_match.group(1),
-
-                "transaction_id": id_match.group(1) if id_match else None,
-
-                "date_format": "%b %d, %Y"
-
+                "date": date_text,
+                "description": description.strip(),
+                "type": txn_type.title(),
+                "amount": amount_text,
+                "transaction_id": None,
+                "date_format": "%d-%m-%Y",
             })
 
+        # Parse PhonePe statement format if sample format was not found.
+        if not transactions_to_import:
+            date_pattern = re.compile(
+                r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
+                r"\s+\d{1,2},\s+\d{4}\b",
+                re.IGNORECASE,
+            )
 
-    if not transactions_to_import:
+            date_matches = list(date_pattern.finditer(extracted_text))
 
-        flash(
+            for index, date_match in enumerate(date_matches):
+                block_start = date_match.start()
+                block_end = (
+                    date_matches[index + 1].start()
+                    if index + 1 < len(date_matches)
+                    else len(extracted_text)
+                )
+                block = extracted_text[block_start:block_end]
 
-            "No transactions recognized. Please check the PDF text format."
+                type_match = re.search(
+                    r"\b(DEBIT|CREDIT)\b", block, re.IGNORECASE
+                )
+                id_match = re.search(
+                    r"Transaction\s*ID\s*[:#]?\s*([A-Za-z0-9_-]+)",
+                    block,
+                    re.IGNORECASE,
+                )
+                amount_match = re.search(
+                    r"₹\s*([\d,]+(?:\.\d{1,2})?)",
+                    block,
+                )
 
+                if not type_match or not amount_match:
+                    continue
+
+                description_match = re.search(
+                    r"\b(Paid to|Received from|Transfer to|"
+                    r"Payment to|Withdrawal from|Top-up)\s+(.+?)"
+                    r"(?=\s+\b(?:DEBIT|CREDIT)\b|₹|\n|$)",
+                    block,
+                    re.IGNORECASE,
+                )
+
+                if description_match:
+                    description = (
+                        description_match.group(1)
+                        + " "
+                        + description_match.group(2)
+                    ).strip()
+                else:
+                    description = "PhonePe transaction"
+
+                transactions_to_import.append({
+                    "date": date_match.group(0),
+                    "description": description,
+                    "type": type_match.group(1).title(),
+                    "amount": amount_match.group(1),
+                    "transaction_id": (
+                        id_match.group(1) if id_match else None
+                    ),
+                    "date_format": "%b %d, %Y",
+                })
+
+        if not transactions_to_import:
+            flash(
+                "No transactions recognized. Please check the PDF text format."
+            )
+            return redirect("/upload-statement")
+
+        # Identify the statement using a stable hash.
+        statement_hash = hashlib.sha256(
+            " ".join(extracted_text.split()).encode("utf-8")
+        ).hexdigest()
+
+        user_id = session["user_id"]
+
+        # Check whether this statement was already imported.
+        check_conn = get_connection()
+        try:
+            already_imported = check_conn.execute(
+                """
+                SELECT 1
+                FROM statement_imports
+                WHERE user_id = %s AND statement_hash = %s
+                LIMIT 1
+                """,
+                (user_id, statement_hash),
+            ).fetchone()
+
+            if already_imported:
+                flash(
+                    "This statement was already imported. "
+                    "No duplicate import made."
+                )
+                return redirect("/transactions")
+        finally:
+            check_conn.close()
+
+        imported = 0
+        duplicates = 0
+        invalid = 0
+
+        connection = get_connection()
+
+        try:
+            cursor = connection.cursor()
+
+            for txn in transactions_to_import:
+                try:
+                    transaction_date = datetime.strptime(
+                        txn["date"].strip(),
+                        txn["date_format"],
+                    ).strftime("%Y-%m-%d")
+
+                    amount = float(txn["amount"].replace(",", ""))
+
+                except (ValueError, TypeError):
+                    invalid += 1
+                    continue
+
+                if amount <= 0:
+                    invalid += 1
+                    continue
+
+                description = txn["description"].strip()
+                db_type = (
+                    "Income"
+                    if txn["type"].lower() == "credit"
+                    else "Expense"
+                )
+
+                category, sub_category = categorize_transaction({
+                    "type": db_type,
+                    "merchant": "",
+                    "description": description,
+                })
+
+                transaction_id = txn["transaction_id"]
+
+                # Generate a stable ID when the PDF has no transaction ID.
+                if not transaction_id:
+                    stable_text = (
+                        f"{user_id}|{transaction_date}|"
+                        f"{db_type}|{amount:.2f}|{description.lower()}"
+                    )
+                    transaction_id = "PDF-" + hashlib.sha256(
+                        stable_text.encode("utf-8")
+                    ).hexdigest()[:32]
+
+                cursor.execute(
+                    """
+                    INSERT INTO transactions (
+                        transaction_id, user_id, date, type,
+                        category, sub_category, amount, description,
+                        is_deleted
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 0)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (
+                        transaction_id,
+                        user_id,
+                        transaction_date,
+                        db_type,
+                        category,
+                        sub_category,
+                        amount,
+                        description,
+                    ),
+                )
+
+                if cursor.rowcount == 1:
+                    imported += 1
+                else:
+                    duplicates += 1
+
+            # Save imported transactions together.
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+            app.logger.exception("Statement import failed")
+            flash("Import failed. Please check the application logs.")
+            return redirect("/upload-statement")
+
+        finally:
+            connection.close()
+
+        # Mark the statement as imported after transaction commit.
+        mark_conn = get_connection()
+        try:
+            mark_conn.execute(
+                """
+                INSERT INTO statement_imports (user_id, statement_hash)
+                VALUES (%s, %s)
+                ON CONFLICT (user_id, statement_hash) DO NOTHING
+                """,
+                (user_id, statement_hash),
+            )
+            mark_conn.commit()
+        finally:
+            mark_conn.close()
+
+        elapsed = time.perf_counter() - import_started
+
+        app.logger.info(
+            "Statement import finished in %.2f seconds. "
+            "Imported=%s, duplicates=%s, invalid=%s",
+            elapsed,
+            imported,
+            duplicates,
+            invalid,
         )
 
-        return redirect("/upload-statement")
-
-
-    # Identify a previously imported statement for this user
-
-    statement_hash = hashlib.sha256(
-
-        " ".join(extracted_text.split()).encode("utf-8")
-
-    ).hexdigest()
-
-
-    check_conn = get_connection()
-
-    try:
-
-        check_conn.execute("""
-
-            CREATE TABLE IF NOT EXISTS statement_imports (
-
-                id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
-
-                user_id INTEGER NOT NULL REFERENCES users(id),
-
-                statement_hash TEXT NOT NULL,
-
-                imported_at TEXT DEFAULT CURRENT_TIMESTAMP,
-
-                UNIQUE(user_id, statement_hash)
-
-            )
-
-        """)
-
-
-        already_imported = check_conn.execute("""
-
-            SELECT 1 FROM statement_imports
-
-            WHERE user_id = %s AND statement_hash = %s
-
-            LIMIT 1
-
-        """, (session["user_id"], statement_hash)).fetchone()
-
-
-        if already_imported:
-
-            flash("This statement was already imported. No duplicate import made.")
-
-            return redirect("/transactions")
-
-
-    finally:
-
-        check_conn.close()
-
-
-    imported = 0
-
-    duplicates = 0
-
-    invalid = 0
-
-    connection = get_connection()
-
-
-    try:
-
-        cursor = connection.cursor()
-
-
-        for txn in transactions_to_import:
-
-            try:
-
-                transaction_date = datetime.strptime(
-
-                    txn["date"].strip(),
-
-                    txn["date_format"]
-
-                ).strftime("%Y-%m-%d")
-
-
-                amount = float(txn["amount"].replace(",", ""))
-
-
-            except (ValueError, TypeError):
-
-                invalid += 1
-
-                continue
-
-
-            if amount <= 0:
-
-                invalid += 1
-
-                continue
-
-
-            description = txn["description"].strip()
-
-            transaction_type = txn["type"].lower()
-
-            text_to_check = description.lower()
-
-
-            if transaction_type == "credit":
-
-                db_type = "Income"
-
-            else:
-
-                db_type = "Expense"
-
-
-            category, sub_category = categorize_transaction({
-
-                "type": db_type,
-
-                "merchant": "",
-
-                "description": description
-
-            })
-
-
-            # Use the original PhonePe transaction ID when available.
-
-            # For sample statements, create a stable ID from row details.
-
-            transaction_id = txn["transaction_id"]
-
-
-            if not transaction_id:
-
-
-                stable_text = (
-
-                    f'{session["user_id"]}|{transaction_date}|'
-
-                    f'{db_type}|{amount:.2f}|{description.lower()}'
-
-                )
-
-                transaction_id = "PDF-" + hashlib.sha256(
-
-                    stable_text.encode("utf-8")
-
-                ).hexdigest()[:32]
-
-
-            # Skip an already-imported active transaction with identical details
-
-
-            cursor.execute(
-
-                """
-
-                SELECT 1
-
-                FROM transactions
-
-                WHERE user_id = %s AND transaction_id = %s
-
-                LIMIT 1
-
-                """,
-
-                (session["user_id"], transaction_id)
-
-            )
-
-
-            if cursor.fetchone():
-
-                duplicates += 1
-
-                continue
-
-
-            cursor.execute(
-
-                """
-
-                INSERT INTO transactions (
-
-                    transaction_id, user_id, date, type,
-
-                    category, sub_category, amount, description,
-
-                    is_deleted
-
-                )
-
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 0)
-                ON CONFLICT DO NOTHING
-                """,
-
-                (
-
-                    transaction_id,
-
-                    session["user_id"],
-
-                    transaction_date,
-
-                    db_type,
-
-                    category,
-
-                    sub_category,
-
-                    amount,
-
-                    description
-
-                )
-
-            )
-
-
-            if cursor.rowcount == 1:
-
-                imported += 1
-
-            else:
-
-                duplicates += 1
-
-
-        connection.commit()
-
+        flash(
+            f"Import complete: {imported} imported, "
+            f"{duplicates} duplicates skipped, "
+            f"{invalid} invalid rows skipped."
+        )
+        return redirect("/transactions")
 
     except Exception:
-
-        connection.rollback()
-
-        app.logger.exception("Statement import failed")
-
-        flash("Import failed. Please check the application logs.")
-
+        app.logger.exception("Statement import request failed")
+        flash("Statement import failed. Please check the application logs.")
         return redirect("/upload-statement")
-
-
-    finally:
-
-        connection.close()
-
-
-    mark_conn = get_connection()
-
-    try:
-
-        mark_conn.execute("""
-
-            INSERT INTO statement_imports
-
-                (user_id, statement_hash)
-
-            VALUES (%s, %s)
-            ON CONFLICT (user_id, statement_hash) DO NOTHING
-        """, (session["user_id"], statement_hash))
-
-        mark_conn.commit()
-
-    finally:
-
-        mark_conn.close()
-
-
-    flash(
-
-        f"Import complete: {imported} imported, "
-
-        f"{duplicates} duplicates skipped, "
-
-        f"{invalid} invalid rows skipped."
-
-    )
-
-    return redirect("/transactions")
 
 
 @app.route("/ai-coach")
